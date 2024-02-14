@@ -1,0 +1,505 @@
+# %% [markdown]
+# 
+
+# %% [markdown]
+# # 0. Setup
+
+# %%
+## Testing optimized code
+# Verify we're in the correct working directory
+import os, sys
+import git 
+from pathlib import Path
+
+def get_project_root():
+    return Path(git.Repo('.', search_parent_directories=True).working_tree_dir)
+
+root = get_project_root()
+
+os.chdir(root)
+os.getcwd()
+
+print(sys.path)
+
+# %%
+plot_folder = "results/images/simulations/"
+
+# %% [markdown]
+# ## import packages, models, trainers
+
+# %%
+import argparse
+import logging
+import sys
+import time
+import warnings
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt; plt.rcParams['figure.dpi'] = 200
+
+import torch
+from torch import nn, optim, Tensor
+from torch.nn import functional as F
+from torch.optim import lr_scheduler
+from torch.utils.data import DataLoader, TensorDataset
+
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import log_loss
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import roc_auc_score
+
+print('pytorch version:', torch.__version__)
+print('orig num threads:', torch.get_num_threads())
+
+# %%
+from models import *
+from trainers import *
+from losses import *
+from utils import *
+from visuals import *
+
+# %%
+import random
+seed=42
+
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+
+random.seed(seed)
+np.random.seed(seed)
+os.environ['PYTHONHASHSEED'] = str(seed)
+
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
+# %% [markdown]
+# # 1. Prepare dataset
+
+# %% [markdown]
+# ## Load 
+
+# %%
+simu_folder = "data/simulations"
+RNAseq = pd.read_csv(os.path.join(simu_folder, "simu2_RNAseq.csv"), index_col = 0)
+RNAseq_meta = pd.read_csv(os.path.join(simu_folder, "simu2_RNAseq_meta.csv"), index_col = 0)
+d_fp = pd.read_csv(os.path.join(simu_folder, "simu2_d_fp.csv"), index_col = 0)
+# cdr = pd.read_csv(os.path.join(simu_folder, "simu2_cdr.csv"), index_col = 0)
+cdr = pd.read_csv(os.path.join(simu_folder, "simu2.2_cdr_noise.csv"), index_col = 0)
+
+# %%
+RNAseq_meta['C_type'] = RNAseq_meta['C_type'].replace('grp3', 'grp0')
+
+# %%
+c_data = RNAseq.T
+
+# originally
+c_meta, meta_map = get_CCL_meta_codes(RNAseq.columns.values, RNAseq_meta)
+
+print(f"Cancer type coding map: ")
+print(meta_map)
+
+d_data = d_fp.T
+
+cdr = cdr
+cdr.index = cdr.index.astype("str")
+
+# %%
+num_cluster = 3
+
+# only two groups
+two_grp = True
+if two_grp:
+    num_cluster = 2
+    RNAseq_meta.loc[RNAseq_meta.C_type=='grp2', 'C_type'] = 'grp1'
+    
+    c_meta_true = c_meta
+    c_meta, meta_map = get_CCL_meta_codes(RNAseq.columns.values, RNAseq_meta)
+    print(f"Cancer type coding map: ")
+    print(meta_map)
+
+# %% [markdown]
+# ## Train & Test split
+
+# %%
+c_train, c_test = train_test_split(c_data, test_size=0.15)
+
+c_meta_train = get_CCL_meta(c_train.index.values, c_meta)
+c_meta_test = get_CCL_meta(c_test.index.values, c_meta)
+
+cdr_train_idx = np.isin(cdr.index.values, c_train.index.values)
+cdr_train = cdr[cdr_train_idx]
+cdr_test = cdr[~cdr_train_idx]
+
+if two_grp:
+    c_meta_train_true = get_CCL_meta(c_train.index.values, c_meta_true)
+    c_meta_test_true = get_CCL_meta(c_test.index.values, c_meta_true)
+
+# %%
+print(f"Training data: \n   cdr: {cdr_train.shape}\n   c_data: {c_train.shape} \n   d_data: {d_data.shape}")
+print(f"   Number of each initial cancer clusters: \n")
+if two_grp:
+    print(pd.crosstab(c_meta_train_true['code'], c_meta_train['code'], margins=True, margins_name="Total"))
+else:
+    print(c_meta_train['code'].value_counts())
+
+print(f"\nTesting data:  \n   cdr: {cdr_test.shape}\n   c_data: {c_test.shape} \n   d_data: {d_data.shape}")
+print(f"   Number of each initial cancer clusters: \n")
+if two_grp:
+    print(pd.crosstab(c_meta_test_true['code'], c_meta_test['code'], margins=True, margins_name="Total"))
+else:
+    print(c_meta_test['code'].value_counts())
+
+
+# %% [markdown]
+# # 2. Hyperparameters
+
+# %%
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# torch.cuda.set_device(device)
+print(device)
+
+# %%
+c_data.shape
+
+# %%
+class Train_Args:
+    def __getitem__(self, key):
+        return getattr(self, key)
+    def __setitem__(self, key, val):
+        setattr(self, key, val)
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    valid_size = 0.2 #@param {type: "float"}
+
+    n_epochs = 100 #@param {type: "integer"}
+    batch_size = None #@param {type: "integer"}
+    lr = 0.01 #@param {type: "float"}
+    
+    C_VAE_loss_weight = 0.1 #@param {type: "float"}
+    C_recon_loss_weight = 1 #@param {type: "float"}
+    C_kld_weight = 0.5 #@param {type: "float"}
+    C_cluster_distance_weight = 5 #@param {type: "float"}  
+    C_update_ratio_weight = 5 #@param {type: "float"}
+    
+    D_VAE_loss_weight = 0.5 #@param {type: "float"}
+    D_recon_loss_weight = 1 #@param {type: "float"}
+    D_kld_weight = 0.25 #@param {type: "float"}
+    D_cluster_distance_weight = 5 #@param {type: "float"}
+    D_update_ratio_weight = 5 #@param {type: "float"}
+    
+    predict_loss_weight = 2500 #@param {type: "float"}
+
+    rm_cluster_outliers = False #@param {type: "bool"}
+    use_mixture_kld = True #@param {type: "bool"}
+    
+    cVAE_save_path = 'data/model_fits/GDSC_simu2.2_c_vae' #@param
+    dVAE_save_path = 'data/model_fits/GDSC_simu2.2_d_vae' #@param
+    
+    c_p_save_path = 'data/model_fits/GDSC_simu2.2_c_vae_predictor' #@param
+    d_p_save_path = 'data/model_fits/GDSC_simu2.2_d_vae_predictor' #@param
+    
+
+class CDPModel_sub_Args:
+    def __getitem__(self, key):
+        return getattr(self, key)
+    def __setitem__(self, key, val):
+        setattr(self, key, val)
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    # c_VAE
+    c_input_dim = 0 #@param {type: "integer"}
+    c_h_dims = [64] #@param {type: "vactor"}
+    c_latent_dim = 32 #@param {type: "integer"}
+
+    # d_VAE
+    d_input_dim = 0 #@param {type: "integer"}
+    d_h_dims = [64]  #@param {type: "vactor"}
+    d_latent_dim = 32 #@param {type: "integer"}
+
+    # predictor
+    p_sec_dim = 32 #@param {type: "integer"}
+    p_h_dims = [p_sec_dim*2, 16]  #@param {type: "vactor"}
+    
+    # all
+    drop_out = 0  #@param {type: "float"}
+    
+    # sensitive threshold
+    sens_cutoff = 0.5
+
+
+# %%
+train_args = Train_Args()
+
+K = len(c_meta['code'].unique())
+
+CDPmodel_args_sim2_2 = CDPModel_sub_Args()
+CDPmodel_args_sim2_2['c_input_dim'] = c_data.shape[1] 
+CDPmodel_args_sim2_2['d_input_dim'] = d_data.shape[1]
+
+
+if CDPmodel_args_sim2_2['c_input_dim'] <= 0:
+  warnings.warn(
+      '''\nCancer Cell line feat222iiZZXCx9MWWMW                           ure number not specified''')
+if CDPmodel_args_sim2_2['d_input_dim'] <= 0:
+  warnings.warn(
+      '''\nDrug feature number not specified''')
+
+
+
+
+CDPmodel_sim2_2 = CDPmodel(K, CDPmodel_args_sim2_2)
+n_rounds = 5
+fit_returns = CDPmodel_sim2_2.fit(c_train, c_meta_train, d_data, cdr_train, train_args, n_rounds=n_rounds, search_subcluster=True, device = device)
+c_meta, c_meta_hist, d_sens_hist, losses_train_hist_list, best_epos_list, C_VAE_init_losses, D_VAE_init_losses, c_latent_list, d_latent_list = fit_returns
+
+print("First bicluster run is done!")
+
+
+### TODO: debugging the re-run breakdown?
+CDPmodel_sim2_2 = CDPmodel(K, CDPmodel_args_sim2_2)
+n_rounds = 5
+fit_returns = CDPmodel_sim2_2.fit(c_train, c_meta_train, d_data, cdr_train, train_args, n_rounds=n_rounds, search_subcluster=True, device = device)
+c_meta, c_meta_hist, d_sens_hist, losses_train_hist_list, best_epos_list, C_VAE_init_losses, D_VAE_init_losses, c_latent_list, d_latent_list = fit_returns
+
+
+
+# # 4. Results and visualizations
+# 
+# ## 4.1. Prediction:
+# 
+# ### Training data:
+
+# %%
+cdr_train_hat = CDPmodel_sim2_2.predict(c_train, d_data)
+
+cdr_train_rslt = cdr_train.copy()
+cdr_train_rslt['c_name'] = cdr_train_rslt.index.values
+cdr_train_rslt = pd.melt(cdr_train_rslt, id_vars='c_name', value_vars=None, var_name=None, value_name='value', col_level=None)
+cdr_train_rslt = cdr_train_rslt.rename(columns={'variable':'d_name', 'value':'cdr'})
+
+cdr_train_rslt = pd.merge(cdr_train_rslt, cdr_train_hat, on=['c_name', 'd_name'], how='outer')
+
+# %%
+cdr_train_rslt.head()
+
+# %%
+cdr_train_hat.cluster.value_counts()
+
+# %%
+# Binary cross entropy
+cdr_train_rslt_noNA = cdr_train_rslt.dropna(subset=['cdr_hat', 'cdr'])
+binary_cross_entropy_train = log_loss(cdr_train_rslt_noNA['cdr'], cdr_train_rslt_noNA['cdr_hat'])
+print(f"Binary cross entropy: {round(binary_cross_entropy_train, 4)}")
+
+
+# Area Under the Curve (AUC) for a Receiver Operating Characteristic (ROC) 
+roc_auc = roc_auc_score(cdr_train_rslt_noNA['cdr'], cdr_train_rslt_noNA['cdr_hat'])
+print("ROC AUC:", round(roc_auc,4))
+
+# confusion_ atrix
+cdr_train_rslt_noNA['cdr_hat_bnr'] = (cdr_train_rslt_noNA['cdr_hat'] > 0.5).astype(int)
+
+conf_matrix = confusion_matrix(cdr_train_rslt_noNA['cdr'], cdr_train_rslt_noNA['cdr_hat_bnr'])
+tn, fp, fn, tp = conf_matrix.ravel()
+
+print(f"\nTrue Positive:  {tp} ({(tp / (tp + fn)) * 100:.2f} %)")
+print(f"False Negative: {fn} ({(fn / (fn + tp)) * 100:.2f} %)")
+
+print(f"True Negative:  {tn} ({(tn / (tn + fp)) * 100:.2f} %)")
+print(f"False Positive: {fp} ({(fp / (fp + tn)) * 100:.2f} %)")
+
+# %%
+cdr_train_hat.to_csv(os.path.join(simu_folder, "GDSC_simu2.2_cdr_hat_train.csv"), index=True)
+
+# %% [markdown]
+# ### Testing data
+
+# %%
+cdr_test_hat = CDPmodel_sim2_2.predict(c_test, d_data, sd_scale = 6)
+
+cdr_test_rslt = cdr_test.copy()
+cdr_test_rslt['c_name'] = cdr_test_rslt.index.values
+cdr_test_rslt = pd.melt(cdr_test_rslt, id_vars='c_name', value_vars=None, var_name=None, value_name='value', col_level=None)
+cdr_test_rslt = cdr_test_rslt.rename(columns={'variable':'d_name', 'value':'cdr'})
+
+cdr_test_rslt = pd.merge(cdr_test_rslt, cdr_test_hat, on=['c_name', 'd_name'], how='outer')
+
+# %%
+# Binary cross entropy
+cdr_test_rslt_noNA = cdr_test_rslt.dropna(subset=['cdr_hat', 'cdr'])
+binary_cross_entropy_test = log_loss(cdr_test_rslt_noNA['cdr'], cdr_test_rslt_noNA['cdr_hat'])
+print(f"Binary cross entropy: {round(binary_cross_entropy_test, 4)}")
+
+
+# Area Under the Curve (AUC) for a Receiver Operating Characteristic (ROC) 
+roc_auc = roc_auc_score(cdr_test_rslt_noNA['cdr'], cdr_test_rslt_noNA['cdr_hat'])
+print("ROC AUC:", round(roc_auc,4))
+
+# confusion_ atrix
+cdr_test_rslt_noNA['cdr_hat_bnr'] = (cdr_test_rslt_noNA['cdr_hat'] > 0.5).astype(int)
+
+conf_matrix = confusion_matrix(cdr_test_rslt_noNA['cdr'], cdr_test_rslt_noNA['cdr_hat_bnr'])
+tn, fp, fn, tp = conf_matrix.ravel()
+
+print(f"\nTrue Positive:  {tp} ({(tp / (tp + fn)) * 100:.2f} %)")
+print(f"False Negative: {fn} ({(fn / (fn + tp)) * 100:.2f} %)")
+
+print(f"True Negative:  {tn} ({(tn / (tn + fp)) * 100:.2f} %)")
+print(f"False Positive: {fp} ({(fp / (fp + tn)) * 100:.2f} %)")
+
+
+# %% [markdown]
+# ## 4.2. Clustering
+# ### Trainning data
+
+# %%
+c_meta_train_tmp = c_meta_train.loc[:, ['code']]
+c_meta_train_tmp['c_name'] = c_meta_train_tmp.index.values.astype(str)
+c_meta_train_tmp = c_meta_train_tmp.rename(columns={'code':'cluster_init'})
+
+cdr_train_rslt_tmp = cdr_train_rslt[['c_name', 'cluster']]
+cdr_train_rslt_tmp = cdr_train_rslt_tmp.drop_duplicates()
+cdr_train_rslt_tmp['c_name'] = cdr_train_rslt_tmp['c_name'].astype(str)
+
+cdr_train_rslt_cluster = pd.merge(cdr_train_rslt_tmp, c_meta_train_tmp, on='c_name', how='left')
+
+print("CD-bicluster:")
+if two_grp:
+    c_meta_true_tmp = c_meta_true.loc[:, ['code']]
+    c_meta_true_tmp['c_name'] = c_meta_true_tmp.index.values.astype(str)
+    c_meta_true_tmp = c_meta_true_tmp.rename(columns={'code':'cluster_true'})
+
+    cdr_train_rslt_cluster = pd.merge(cdr_train_rslt_cluster, c_meta_true_tmp, on='c_name', how='left')
+    
+    print(pd.crosstab([cdr_train_rslt_cluster['cluster_true'], cdr_train_rslt_cluster['cluster_init']], cdr_train_rslt_cluster['cluster']))
+else:
+    print(pd.crosstab(cdr_train_rslt_cluster['cluster_init'], cdr_train_rslt_cluster['cluster']))
+
+    
+
+
+# %%
+cdr_train_rslt_tmp = cdr_train_rslt[['c_name', 'c_cluster']]
+cdr_train_rslt_tmp = cdr_train_rslt_tmp.drop_duplicates()
+cdr_train_rslt_tmp['c_name'] = cdr_train_rslt_tmp['c_name'].astype(str)
+
+cdr_train_rslt_cluster = pd.merge(cdr_train_rslt_tmp, c_meta_train_tmp, on='c_name', how='left')
+
+print("Cancer cluster:")
+if two_grp:
+    c_meta_true_tmp = c_meta_true.loc[:, ['code']]
+    c_meta_true_tmp['c_name'] = c_meta_true_tmp.index.values.astype(str)
+    c_meta_true_tmp = c_meta_true_tmp.rename(columns={'code':'cluster_true'})
+
+    cdr_train_rslt_cluster = pd.merge(cdr_train_rslt_cluster, c_meta_true_tmp, on='c_name', how='left')
+    
+    print(pd.crosstab([cdr_train_rslt_cluster['cluster_true'], cdr_train_rslt_cluster['cluster_init']], cdr_train_rslt_cluster['c_cluster']))
+else:
+    print(pd.crosstab(cdr_train_rslt_cluster['cluster_init'], cdr_train_rslt_cluster['c_cluster']))
+
+
+# %%
+print('Sensitive to clusters before:')
+print(d_sens_hist.sensitive_k.value_counts())
+print('Sensitive to clusters after:')
+print(d_sens_hist.sensitive_k_latest.value_counts())
+
+
+# %% [markdown]
+# ### Testing data
+
+# %%
+c_meta_test_tmp = c_meta_test.loc[:, ['code']]
+c_meta_test_tmp['c_name'] = c_meta_test_tmp.index.values.astype(str)
+c_meta_test_tmp = c_meta_test_tmp.rename(columns={'code':'cluster_init'})
+
+cdr_test_rslt_tmp = cdr_test_rslt[['c_name', 'cluster']]
+cdr_test_rslt_tmp = cdr_test_rslt_tmp.drop_duplicates()
+cdr_test_rslt_tmp['c_name'] = cdr_test_rslt_tmp['c_name'].astype(str)
+
+
+cdr_test_rslt_cluster = pd.merge(cdr_test_rslt_tmp, c_meta_test_tmp, on='c_name', how='left')
+
+print("CD-bicluster:")
+
+if two_grp:
+    cdr_test_rslt_cluster = pd.merge(cdr_test_rslt_cluster, c_meta_true_tmp, on='c_name', how='left')
+    
+    print(pd.crosstab([cdr_test_rslt_cluster['cluster_true'], cdr_test_rslt_cluster['cluster_init']], cdr_test_rslt_cluster['cluster']))
+else:
+    print(pd.crosstab(cdr_test_rslt_cluster['cluster_init'], cdr_test_rslt_cluster['cluster']))
+    
+
+# %%
+cdr_test_rslt_tmp = cdr_test_rslt[['c_name', 'c_cluster']]
+cdr_test_rslt_tmp = cdr_test_rslt_tmp.drop_duplicates()
+cdr_test_rslt_tmp['c_name'] = cdr_test_rslt_tmp['c_name'].astype(str)
+
+cdr_test_rslt_cluster = pd.merge(cdr_test_rslt_tmp, c_meta_test_tmp, on='c_name', how='left')
+
+print("Cancer cluster:")
+if two_grp:
+    c_meta_true_tmp = c_meta_true.loc[:, ['code']]
+    c_meta_true_tmp['c_name'] = c_meta_true_tmp.index.values.astype(str)
+    c_meta_true_tmp = c_meta_true_tmp.rename(columns={'code':'cluster_true'})
+
+    cdr_test_rslt_cluster = pd.merge(cdr_test_rslt_cluster, c_meta_true_tmp, on='c_name', how='left')
+    
+    print(pd.crosstab(cdr_test_rslt_cluster['cluster_true'], cdr_test_rslt_cluster['c_cluster']))
+
+
+
+# %% [markdown]
+# ## Visualizations
+
+# %%
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.decomposition import PCA
+import seaborn as sns
+
+# %% [markdown]
+# ### Trainning data:
+
+# %%
+plot_c_PCA_latent(c_train, n_rounds, fit_returns, model=CDPmodel_sim2_2, plots_save_path=f'{plot_folder}simu2.2_{num_cluster}clusters_c_latent')
+
+# %%
+plot_d_PCA_latent(d_data, n_rounds, fit_returns, model=CDPmodel_sim2_2, plots_save_path=f'{plot_folder}simu2.2_{num_cluster}clusters_d_latent')
+
+# %% [markdown]
+# ### Adding testing data:
+
+# %%
+for k in range(-1, CDPmodel_sim2_2.K):
+    plot_c_PCA_latent_test(CDPmodel_sim2_2, device, n_rounds, c_latent_list, c_train, c_test, cdr_train_rslt_cluster, cdr_test_rslt_cluster, k=k, 
+                       plot_save_path=f'{plot_folder}simu2.2_{num_cluster}clusters_c_latent_k{k}_test_data.png')
+
+# %% [markdown]
+# ### Losses:
+
+# %%
+for k in range(CDPmodel_sim2_2.K):
+    print(f'k = {k}:')
+    for b in range(n_rounds):
+        print(f'round {b}:')
+        plot_training_losses_train_test_2cols(losses_train_hist_list[k][b], best_epoch_1round = best_epos_list[k][b],
+                                              plot_save_path=f'{plot_folder}simu2.2_{num_cluster}clusters_losses_k{k}_b{b}.png')
+        
+
+# %%
+for k in range(CDPmodel_sim2_2.K):
+    print(f'k = {k}:')
+    for b in range(n_rounds):
+        print(f'round {b}:')
+        plot_predict_training_losses_train_test_2cols(losses_train_hist_list[k][b], best_epoch_1round = best_epos_list[k][b])
+        
+
+# %%
+
+
+

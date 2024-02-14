@@ -2,6 +2,9 @@ import pandas as pd
 import numpy as np
 from scipy.stats import pearsonr
 import math
+from torch.utils.data import Dataset, DataLoader
+import torch
+from sklearn.model_selection import train_test_split
 
 #-------------------------------------------------------------------------------------------------------------------------------------------
 # CDR relevent functions
@@ -123,13 +126,6 @@ def find_outliers_IQR(dists):
     return outliers_idx
 
 def find_outliers_3sd(latent):
-    # upper_limit = latent.mean() + 3*latent.std()
-    # lower_limit = latent.mean() - 3*latent.std()
-    
-    # outliers_idx = (latent > upper_limit)|(latent < lower_limit)
-    # outliers_idx = outliers_idx.flatten().numpy()
-    # outliers_idx = np.where(outliers_idx)
-    # return outliers_idx
 
     mean_tensor = latent.mean(dim=0)
     sd_tensor = latent.std(dim=0)
@@ -143,8 +139,152 @@ def find_outliers_3sd(latent):
 
     return index_of_outlier
 
+#-------------------------------------------------------------------------------------------------------------------------------------------
+## Trainer Inputs and Outputs preparation:
+
+def clean_cdr_for_trainers(
+        cdr_data
+        ):
+    cdr = cdr_data.copy()
+
+    cdr['c_name'] = cdr.index.values
+    cdr = pd.melt(
+        cdr, 
+        id_vars='c_name', value_vars=None, 
+        var_name=None, value_name='value', 
+        col_level=None)
+    
+    cdr = cdr.rename(columns={'variable':'d_name', 'value':'cdr'})
+    cdr_all = cdr.copy()
+
+    cdr_all = cdr_all[~cdr_all['cdr'].isnull()] # remove NA values
+
+    c_name_encoded, c_name_encode_map = one_hot_encode(cdr_all['c_name'])
+    cdr_all['c_name_encoded'] = c_name_encoded
+    d_name_encoded, d_name_encode_map = one_hot_encode(cdr_all['d_name'])
+    cdr_all['d_name_encoded'] = d_name_encoded
+
+    return cdr_all
+
+def sort_cdr_data(c_data, d_data, cdr_all):
+    c_index_orig = c_data.index.values
+    d_index_orig = d_data.index.values
+    ## simple sorter
+    c_data = c_data.sort_index()
+    d_data = d_data.sort_index()
+    cdr_all = cdr_all.sort_values(by=['c_name', 'd_name'])
+
+    c_orig_idx_map = c_data.index.get_indexer(c_index_orig)
+    d_orig_idx_map = d_data.index.get_indexer(d_index_orig)
+
+    return c_data, d_data, cdr_all, c_orig_idx_map, d_orig_idx_map
+
+def prepare_model_IO(
+        train_data_type: str, # "cell" or "drug"
+        c_data,
+        d_data,
+        cdr_all,
+        c_names_k,
+        d_names_k,
+        valid_size = 0.2,
+        batch_size = None,
+        device = torch.device('cpu')
+        ):
+
+    ## Sort the data:
+    c_data, d_data, cdr_all, _, _ = sort_cdr_data(
+            c_data, d_data, cdr_all
+        )
+
+    if train_data_type == "drug":
+        data_k = c_data.loc[c_data.index.isin(c_names_k)]
+        ### corresponding cdr
+        cdr_k = cdr_all.loc[cdr_all.c_name.isin(data_k.index.values)]
+
+    else: ## train_data_type == "cell"
+        data_k = d_data.loc[d_data.index.isin(d_names_k)]
+        ### corresponding cdr
+        cdr_k = cdr_all.loc[cdr_all.d_name.isin(data_k.index.values)]
+
+    ### to wide
+    cdr_k_w_na = cdr_k.drop(columns=['c_name_encoded', 'd_name_encoded']).pivot(index='c_name', columns='d_name', values='cdr')
+
+    ## get idx of members of old clusters:
+    cell_idx_k_init = [cdr_k_w_na.index.get_loc(row) for row in c_names_k]
+    drug_idx_k_init = [cdr_k_w_na.columns.get_loc(col) for col in d_names_k] 
+     
+
+    ## collect coordinates to keep track of cell and drug idx
+    cdr_k_w_na = cdr_k_w_na.to_numpy()
+    cell_drug_idx = np.argwhere(np.ones(cdr_k_w_na.shape))
+
+    ## flatten and track non-missing values.
+    cdr_k_w_na = cdr_k_w_na.flatten()
+    cdr_coords_not_na = np.argwhere(~np.isnan(cdr_k_w_na))
+
+    ##---------------------
+    ## train, test split, collect all into dictionary
+    
+    if train_data_type == 'cell':
+        stratify_array = cell_drug_idx[:,0][cdr_coords_not_na]
+    else:
+        stratify_array = cell_drug_idx[:,1][cdr_coords_not_na]
+    cdr_idx_train, cdr_idx_valid = train_test_split(
+        cdr_coords_not_na, test_size=valid_size,
+        stratify=stratify_array)
+
+    cdr_outputs_dict = {}
+    cdr_outputs_dict['cdr_vals'] = cdr_k_w_na
+    cdr_outputs_dict['cdr_idx_train'] = cdr_idx_train
+    cdr_outputs_dict['cdr_idx_valid'] = cdr_idx_valid
+    cdr_outputs_dict['cell_idx'] = cell_drug_idx[:,0]
+    cdr_outputs_dict['drug_idx'] = cell_drug_idx[:,1]
+    cdr_outputs_dict['cell_idx_k_init'] = cell_idx_k_init
+    cdr_outputs_dict['drug_idx_k_init'] = drug_idx_k_init
+
+    
+    ## here is where we invoke only using one modality as "training items"
+    if train_data_type == "drug":
+        data_Tensor = torch.FloatTensor(d_data.values).to(device)
+    else:
+        data_Tensor = torch.FloatTensor(c_data.values).to(device)
+    
+    train_dataset = DatasetWithIndices(data_Tensor)
+    valid_dataset = DatasetWithIndices(data_Tensor)
+
+    if batch_size is None:
+        batch_size = data_Tensor.shape[0]
+
+    X_trainDataLoader = DataLoader(
+        dataset=train_dataset, 
+        batch_size=batch_size, 
+        shuffle=True)
+    X_validDataLoader = DataLoader(
+        dataset=valid_dataset, 
+        batch_size=batch_size, 
+        shuffle=True)
+
+    dataloaders = {
+        'train': X_trainDataLoader,
+        'val': X_validDataLoader,
+        'data_type': train_data_type}
+    
+    return data_k, dataloaders, cdr_outputs_dict
 
 
+def create_bin_sensitive_dfs(
+        c_data, d_data, c_names_sens, d_names_sens
+        ):
+    
+    c_meta_k = pd.DataFrame(index = c_data.index.values)
+    c_meta_k['key'] = 0
+    c_meta_k.loc[c_names_sens, 'key'] = 1
+
+    d_sens_k = pd.DataFrame(index = d_data.index.values)
+    d_sens_k['sensitive'] = 0 
+    d_sens_k.loc[d_names_sens, 'sensitive'] = 1
+
+    return c_meta_k, d_sens_k
 
 #-------------------------------------------------------------------------------------------------------------------------------------------
 def get_C_sensitive_codes(cdr_k, sens_cutoff):
@@ -194,6 +334,21 @@ def get_D_sensitive(d_names, d_sens_cluster_k):
     d_sens_cluster_k = d_sens_cluster_k.set_index('d_name', drop=True).rename_axis(None)
     
     return(d_sens_cluster_k)
+
+
+
+class DatasetWithIndices(Dataset):
+    def __init__(self, data):
+        self.data = data
+        self.indices = list(range(len(data)))
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        return self.data[index], self.indices[index]
+
+
 #-------------------------------------------------------------------------------------------------------------------------------------------
 # Get training loss history
 def get_train_VAE_hist_df(train_hist, n_epochs):
@@ -210,41 +365,24 @@ def get_train_VAE_hist_df(train_hist, n_epochs):
     return(losses)
 
 
-def get_train_VAE_predictor_hist_df(train_hist, n_epochs, vae_type = "C"):
-    if vae_type == "C":
-        losses = {'epoch': range(n_epochs),
-          'loss_train': [value for key, value in train_hist[0].items() if key[1] == 'train'],
-          'loss_test': [value for key, value in train_hist[0].items() if key[1] == 'val'],
-          'vae_loss_train': [value for key, value in train_hist[1].items() if key[1] == 'train'],
-          'vae_loss_test': [value for key, value in train_hist[1].items() if key[1] == 'val'],
-          'recon_loss_train': [value for key, value in train_hist[2].items() if key[1] == 'train'],
-          'recon_loss_test':[value for key, value in train_hist[2].items() if key[1] == 'val'],
-          'kld_train': [value for key, value in train_hist[3].items() if key[1] == 'train'],
-          'kld_test': [value for key, value in train_hist[3].items() if key[1] == 'val'],
-          'latent_dist_loss_train': [value for key, value in train_hist[4].items() if key[1] == 'train'],
-          'latent_dist_loss_test': [value for key, value in train_hist[4].items() if key[1] == 'val'],
-          'update_overlap_train': [value for key, value in train_hist[5].items() if key[1] == 'train'],
-          'update_overlap_test': [value for key, value in train_hist[5].items() if key[1] == 'val'],
-          'prediction_loss_train': [value for key, value in train_hist[11].items() if key[1] == 'train'],
-          'prediction_loss_test': [value for key, value in train_hist[11].items() if key[1] == 'val']
-         }
-    if vae_type == "D":
-        losses = {'epoch': range(n_epochs),
-          'loss_train': [value for key, value in train_hist[0].items() if key[1] == 'train'],
-          'loss_test': [value for key, value in train_hist[0].items() if key[1] == 'val'],
-          'vae_loss_train': [value for key, value in train_hist[6].items() if key[1] == 'train'],
-          'vae_loss_test': [value for key, value in train_hist[6].items() if key[1] == 'val'],
-          'recon_loss_train': [value for key, value in train_hist[7].items() if key[1] == 'train'],
-          'recon_loss_test':[value for key, value in train_hist[7].items() if key[1] == 'val'],
-          'kld_train': [value for key, value in train_hist[8].items() if key[1] == 'train'],
-          'kld_test': [value for key, value in train_hist[8].items() if key[1] == 'val'],
-          'latent_dist_loss_train': [value for key, value in train_hist[9].items() if key[1] == 'train'],
-          'latent_dist_loss_test': [ value for key, value in train_hist[9].items() if key[1] == 'val'],
-          'update_overlap_train': [value for key, value in train_hist[10].items() if key[1] == 'train'],
-          'update_overlap_test': [value for key, value in train_hist[10].items() if key[1] == 'val'],
-          'prediction_loss_train': [ value for key, value in train_hist[11].items() if key[1] == 'train'],
-          'prediction_loss_test': [value for key, value in train_hist[11].items() if key[1] == 'val']
-         }
+def get_train_VAE_predictor_hist_df(train_hist, n_epochs,): 
+    losses = {'epoch': range(n_epochs),
+        'loss_train': [value for key, value in train_hist[0].items() if key[1] == 'train'],
+        'loss_test': [value for key, value in train_hist[0].items() if key[1] == 'val'],
+        'vae_loss_train': [value for key, value in train_hist[1].items() if key[1] == 'train'],
+        'vae_loss_test': [value for key, value in train_hist[1].items() if key[1] == 'val'],
+        'recon_loss_train': [value for key, value in train_hist[2].items() if key[1] == 'train'],
+        'recon_loss_test':[value for key, value in train_hist[2].items() if key[1] == 'val'],
+        'kld_train': [value for key, value in train_hist[3].items() if key[1] == 'train'],
+        'kld_test': [value for key, value in train_hist[3].items() if key[1] == 'val'],
+        'latent_dist_loss_train': [value for key, value in train_hist[4].items() if key[1] == 'train'],
+        'latent_dist_loss_test': [value for key, value in train_hist[4].items() if key[1] == 'val'],
+        'update_overlap_train': [value for key, value in train_hist[5].items() if key[1] == 'train'],
+        'update_overlap_test': [value for key, value in train_hist[5].items() if key[1] == 'val'],
+        'prediction_loss_train': [value for key, value in train_hist[6].items() if key[1] == 'train'],
+        'prediction_loss_test': [value for key, value in train_hist[6].items() if key[1] == 'val']
+        }
+
     losses = pd.DataFrame(losses)
     return(losses)
 

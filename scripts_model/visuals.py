@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 from scipy.stats import pearsonr
 
@@ -105,6 +106,8 @@ def plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=1, k_
     plt.tight_layout()
     
     if plot_save_path != '':
+        if not os.path.exists(os.path.dirname(plot_save_path)):
+            os.makedirs(os.path.dirname(plot_save_path))
         plt.savefig(plot_save_path, dpi=300)
         
     plt.show()
