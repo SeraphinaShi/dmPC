@@ -17,6 +17,7 @@ def plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=1, k_
         color_labels = np.union1d(color_labels, c_meta_hist[f'code_b{b}'].unique())   
     color_values = sns.color_palette("Set2", 8)
     color_map = dict(zip(color_labels, color_values))
+    print(color_map)
 
     if  k_sub != None:
         color_labels_sub = c_meta_hist[f'code_b{n_rounds - 1}'].astype(str).values
@@ -122,6 +123,12 @@ def plot_c_PCA_latent(c_data, n_rounds, fit_returns, model, plots_save_path):
             plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=k, k_sub = k_sub, plot_save_path=f'{plots_save_path}_k{k}.png')
         else:
             plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=k, plot_save_path=f'{plots_save_path}_k{k}.png')
+
+def plot_c_PCA_latent_tmp(c_data, n_rounds, fit_returns, K, plots_save_path):
+    _, c_meta_hist, _, _, _, _, _, c_latent_list, _ = fit_returns
+    
+    for k in range(K):
+        plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=k, plot_save_path=f'{plots_save_path}_k{k}.png')
 
 
 def plot_c_PCA_latent_old(c_data, c_latent_list, c_meta_hist, n_rounds, legend_title='cluster', k=1, plot_save_path=''):

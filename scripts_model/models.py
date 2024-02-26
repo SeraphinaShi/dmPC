@@ -452,7 +452,7 @@ class CDPmodel(nn.Module):
                         c_names_k_init_1 = c_name_k_1
 
                         ## TODO: this feels quite arbitrary.
-                        sensitive_cut_off = 0.2
+                        sensitive_cut_off = self.sens_cutoff/2
                     else:
                         d_names_k_init_1 = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}_sub_b{b-1}']==1]
                         c_names_k_init_1 = c_meta_hist.index.values[c_meta_hist[f'k{k}_sub_b{b-1}']==1]

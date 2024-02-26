@@ -229,9 +229,19 @@ def prepare_model_IO(
         stratify_array = cell_drug_idx[:,0][cdr_coords_not_na]
     else:
         stratify_array = cell_drug_idx[:,1][cdr_coords_not_na]
+    # cdr_idx_train, cdr_idx_valid = train_test_split(
+    #    cdr_coords_not_na, test_size=valid_size,
+    #    stratify=stratify_array)
+
+    unique_classes = np.unique(stratify_array)
+    min_test_size = len(unique_classes) / len(stratify_array)
+
+    if min_test_size > valid_size:
+        print(f"Adjusting test_size from {valid_size} to {min_test_size} to accommodate all classes.")
+        valid_size = min_test_size
+    
     cdr_idx_train, cdr_idx_valid = train_test_split(
-        cdr_coords_not_na, test_size=valid_size,
-        stratify=stratify_array)
+        cdr_coords_not_na, test_size=valid_size, stratify=stratify_array)
 
     cdr_outputs_dict = {}
     cdr_outputs_dict['cdr_vals'] = cdr_k_w_na
