@@ -345,6 +345,7 @@ class CDPmodel(nn.Module):
                     self.CDPmodel_list[k].state_dict())
 
                 d_name_k_1 = self.d_name_clusters_in_trainnig[k]
+                print(d_name_k_1)
 
                 d_data_1 = d_data.drop(d_name_k_1)
                 cdr_1 = cdr.drop(columns=d_name_k_1)
