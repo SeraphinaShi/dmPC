@@ -345,8 +345,10 @@ class CDPmodel(nn.Module):
                     self.CDPmodel_list[k].state_dict())
 
                 d_name_k_1 = self.d_name_clusters_in_trainnig[k]
-                print(d_name_k_1)
 
+                if not isinstance(d_name_k_1, list):
+                    d_name_k_1 = list(d_name_k_1)
+                    
                 d_data_1 = d_data.drop(d_name_k_1)
                 cdr_1 = cdr.drop(columns=d_name_k_1)
 
@@ -359,7 +361,6 @@ class CDPmodel(nn.Module):
                     True, c_centroids_sub, c_sds_sub, d_centroids_sub, d_sds_sub,
                     c_name_clusters_in_trainnig_sub, d_name_clusters_in_trainnig_sub)
 
-                
                 if k in self.which_non_empty_subcluster:
                     print(f"Subcluster found as cluster {self.original_K + self.which_non_empty_subcluster.index(k)}")
                     
@@ -476,11 +477,13 @@ class CDPmodel(nn.Module):
                     c_names_k_init = self.c_name_clusters_in_trainnig[k]
                     sensitive_cut_off = self.sens_cutoff/2
             else:
-                d_names_k_init = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}_b{b-1}']==1]
                 if not subcluster:
                     c_names_k_init = c_meta_k.index.values[c_meta_k.key == 1] 
+                    d_names_k_init = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}_b{b-1}']==1]
                 else:
                     c_names_k_init = c_meta_hist.index.values[c_meta_hist[f'k{k}_sub_b{b-1}']==1]
+                    d_names_k_init = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}_sub_b{b-1}']==1]
+                
                 sensitive_cut_off = self.sens_cutoff
 
             if not subcluster:
