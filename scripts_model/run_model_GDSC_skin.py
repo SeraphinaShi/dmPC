@@ -183,27 +183,40 @@ class Train_Args:
 
     valid_size = 0.2 #@param {type: "float"}
 
-    n_epochs = 250 #@param {type: "integer"}
+    n_epochs = 500 #@param {type: "integer"}
     batch_size = None #@param {type: "integer"}
     lr = 0.01 #@param {type: "float"}
+    weight_decay = 0.01 #@params {type: "float"}
     
-    C_VAE_loss_weight = 5 #@param {type: "float"}
-    C_recon_loss_weight = 0.05 #@param {type: "float"}
-    C_kld_weight = 1 #@param {type: "float"}
-    C_cluster_distance_weight = 200 #@param {type: "float"}
-    C_update_ratio_weight = 10 #@param {type: "float"}"}
+    # C_VAE_loss_weight = 1 #@param {type: "float"}
+    # C_recon_loss_weight = 100 #@param {type: "float"}
+    # C_kld_weight = 1 #@param {type: "float"}
+    # C_cluster_distance_weight = 200 #@param {type: "float"}
+    # C_update_ratio_weight = 0 #@param {type: "float"}"}
+    C_VAE_loss_weight = 0 #@param {type: "float"}
+    C_recon_loss_weight = 0 #@param {type: "float"}
+    C_kld_weight = 0 #@param {type: "float"}
+    C_update_ratio_weight = 0 #@param {type: "float"}"}
+    C_cluster_distance_weight = 0 #@param {type: "float"}
     
-    D_VAE_loss_weight = 5 #@param {type: "float"}
-    D_recon_loss_weight = 1 #@param {type: "float"}
-    D_kld_weight = 1 #@param {type: "float"}
-    D_cluster_distance_weight = 100 #@param {type: "float"}
-    D_update_ratio_weight = 10 #@param {type: "float"}
+    # D_VAE_loss_weight = 1 #@param {type: "float"}
+    # D_recon_loss_weight = 10 #@param {type: "float"}
+    # D_kld_weight = 1 #@param {type: "float"}
+    # D_cluster_distance_weight = 100 #@param {type: "float"}
+    # D_update_ratio_weight = 0 #@param {type: "float"}
+    D_VAE_loss_weight = 0 #@param {type: "float"}
+    D_recon_loss_weight = 0 #@param {type: "float"}
+    D_kld_weight = 0 #@param {type: "float"}
+    D_cluster_distance_weight = 0 #@param {type: "float"}
+    D_update_ratio_weight = 0 #@param {type: "float"}
     
-    predict_loss_weight = 4000 #@param {type: "float"}
+    predict_loss_weight = 1000 #@param {type: "float"}
     
     rm_cluster_outliers = False #@param {type: "bool"}
-    use_mixture_kld = True #@param {type: "bool"}
+    use_mixture_kld = False #@param {type: "bool"}
     use_weighted_bce = False #param {type: "bool"}
+    use_all_items_for_latent_training = False #param {type: "bool"}
+    augment_positives = True #param {type: "bool"}
     
     cVAE_save_path = 'data/model_fits/GDSC_skin_c_vae' #@param
     dVAE_save_path = 'data/model_fits/GDSC_skin_d_vae_skin' #@param
@@ -223,7 +236,7 @@ class CDPModel_sub_Args:
 
     # c_VAE
     c_input_dim = 0 #@param {type: "integer"}
-    c_h_dims = [1024, 512, 256, 128] #@param {type: "vactor"}
+    c_h_dims = [256, 64] #@param {type: "vactor"}
     c_latent_dim = 32 #@param {type: "integer"}
 
     # d_VAE
@@ -233,13 +246,13 @@ class CDPModel_sub_Args:
 
     # predictor
     p_sec_dim = 16 #@param {type: "integer"}
-    p_h_dims = [p_sec_dim*2, 16]  #@param {type: "vactor"}
+    p_h_dims = [16, 8]  #@param {type: "vactor"}
     
     # all
-    drop_out = 0  #@param {type: "float"}
+    drop_out = 0.3  #@param {type: "float"}
     
     # sensitive threshold
-    sens_cutoff = 0.5
+    sens_cutoff = 0.6
     
 
 
@@ -259,13 +272,7 @@ if CDPmodel_args['d_input_dim'] <= 0:
   warnings.warn(
       '''\nDrug feature number not specified''')
 
-# %%
 
-
-# %%
-
-
-# %% [markdown]
 # # 3. Train Model
 
 # %%
@@ -273,7 +280,7 @@ CDPmodel = CDPmodel(K, CDPmodel_args)
 
 
 # %%
-n_rounds = 5
+n_rounds = 1
 fit_returns = CDPmodel.fit(
     c_data, c_meta, 
     d_data, cdr, 
@@ -454,7 +461,8 @@ for k in range(CDPmodel.K):
         plot_training_losses_train_test_2cols(losses_train_hist_list[k][b], best_epoch_1round = best_epos_list[k][b],
                                               plot_save_path=f'results/images/GDSC/GDSC_skin_losses_b{b}_k{k}.png')
         
-        
+
+print("GDSC skin script is finished.")   
 
 # %% [markdown]
 # ### 
