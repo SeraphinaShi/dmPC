@@ -170,7 +170,7 @@ def train_CDPmodel_local_1round(
 
     print(f"       b. {d_name_sensitive_k.shape[0]} sensitive drug(s)")
     
-    if d_name_sensitive_k.shape[0] <= 1:
+    if d_name_sensitive_k.shape[0] <= 2:
         return True, None, None, None, None, None, None, None, None, None
 
     #c=================================================================================
@@ -267,7 +267,7 @@ def train_CDPmodel_local_1round(
 
     print(f"       d. {c_name_sensitive_k.shape[0]} cancer cell line(s) in the cluster")
 
-    if c_name_sensitive_k.shape[0] <= 1:
+    if c_name_sensitive_k.shape[0] <= 2:
         return True, None, None, None, None, None, None, None, None, None
 
     losses_train_hist = [a_losses, c_losses]
