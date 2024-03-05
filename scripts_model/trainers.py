@@ -32,12 +32,17 @@ def train_CDPmodel_local_1round(
         c_data, d_data, cdr_org, 
         c_names_k_init, d_names_k_init, 
         sens_cutoff, group_id, 
-        params
+                params,
+        train_row_idx_dict = {
+            'c_idx': None,
+            'd_idx': None},
         ):
+    
     valid_size = params['valid_size']
     n_epochs = params['n_epochs']
     batch_size = params['batch_size']
     lr =  params['lr']
+    weight_decay = params['weight_decay']
     C_VAE_loss_weight = params['C_VAE_loss_weight']
     C_recon_loss_weight = params['C_recon_loss_weight']
     C_kld_weight = params['C_kld_weight']
@@ -52,6 +57,8 @@ def train_CDPmodel_local_1round(
     rm_cluster_outliers = params['rm_cluster_outliers']
     use_mixture_kld = params['use_mixture_kld'] ## whether to swap to mixture of Gaussians KLD during bicluster VAE training.
     use_weighted_bce = params['use_weighted_bce']
+    augment_positives = params['augment_positives']
+    
     
     if ifsubmodel == False:
         c_p_save_path = f"{params['c_p_save_path']}{'_'}{group_id}{'.pkl'}"
@@ -82,13 +89,15 @@ def train_CDPmodel_local_1round(
         cdr_all = cdr_all,
         c_names_k = c_names_k_init,
         d_names_k = d_names_k_init,
-        valid_size = valid_size, batch_size = batch_size,
-        device = device
+        train_row_idx_dict = train_row_idx_dict,
+        valid_size = valid_size, 
+        batch_size = batch_size,
+        device = device,
     )
 
     ##---------------------
     ## define optimizer
-    optimizer_e = optim.Adam(model.parameters(), lr=lr)
+    optimizer_e = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     exp_lr_scheduler_e = lr_scheduler.ReduceLROnPlateau(optimizer_e)
 
     ##---------------------
@@ -116,7 +125,8 @@ def train_CDPmodel_local_1round(
         scheduler=exp_lr_scheduler_e,
         save_path = d_p_save_path,
         use_mixture_kld = use_mixture_kld,
-        use_weighted_bce = use_weighted_bce)
+        use_weighted_bce = use_weighted_bce,
+        augment_positives = augment_positives,)
     end = time.time()
     print(f"            Running time: {end - start}")
 
@@ -160,7 +170,7 @@ def train_CDPmodel_local_1round(
 
     print(f"       b. {d_name_sensitive_k.shape[0]} sensitive drug(s)")
     
-    if d_name_sensitive_k.shape[0] <= 1:
+    if d_name_sensitive_k.shape[0] <= 2:
         return True, None, None, None, None, None, None, None, None, None
 
     #c=================================================================================
@@ -176,13 +186,15 @@ def train_CDPmodel_local_1round(
         cdr_all = cdr_all,
         c_names_k = c_names_k_init,
         d_names_k = d_name_sensitive_k,
-        valid_size = valid_size, batch_size = batch_size,
-        device = device
+       train_row_idx_dict = train_row_idx_dict,
+        valid_size = valid_size, 
+        batch_size = batch_size,
+        device = device,
     )
 
     ##---------------------
     ## define optimizer
-    optimizer_e = optim.Adam(model.parameters(), lr=lr)
+    optimizer_e = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     exp_lr_scheduler_e = lr_scheduler.ReduceLROnPlateau(optimizer_e)
 
     ##---------------------
@@ -211,7 +223,8 @@ def train_CDPmodel_local_1round(
         scheduler=exp_lr_scheduler_e,
         save_path = c_p_save_path,
         use_mixture_kld = use_mixture_kld,
-        use_weighted_bce = use_weighted_bce)
+        use_weighted_bce = use_weighted_bce,
+        augment_positives = augment_positives,)
     
     end = time.time()
     print(f"            Running time: {end - start}")
@@ -254,7 +267,7 @@ def train_CDPmodel_local_1round(
 
     print(f"       d. {c_name_sensitive_k.shape[0]} cancer cell line(s) in the cluster")
 
-    if c_name_sensitive_k.shape[0] <= 1:
+    if c_name_sensitive_k.shape[0] <= 2:
         return True, None, None, None, None, None, None, None, None, None
 
     losses_train_hist = [a_losses, c_losses]
@@ -300,7 +313,8 @@ def train_CDPmodel_local(
         save_path="model.pkl", 
         best_model_cache = "drive",
         use_mixture_kld = True,
-        use_weighted_bce = False):
+        use_weighted_bce = False,
+        augment_positives = True):
     
     if(load!=False):
         if(os.path.exists(save_path)):
@@ -331,6 +345,11 @@ def train_CDPmodel_local(
 
 
     for epoch in range(n_epochs):
+        ## TODO: remove below after debugging
+        if epoch % 10 == 0:
+            print(epoch)
+        ## TODO: remove above after debugging
+        ## logging ifo
         logging.info('Epoch {}/{}'.format(epoch, n_epochs - 1))
         logging.info('-' * 10)
 
@@ -379,6 +398,9 @@ def train_CDPmodel_local(
                     d_X = None if data_loaders['data_type'] == 'cell' else data, 
                     )
                 
+                ### Prepare various loss-related objects depending on the update modality:
+                data_idx_np = data_idx.numpy()
+                value_mapping = {data_idx_np[i]: i for i in range(data_idx_np.shape[0])}
 
                 ## collect the overall out_idx by train/valid split:
                 if phase ==  'train':
@@ -392,13 +414,19 @@ def train_CDPmodel_local(
                 else:
                     cdr_in_batch = np.isin(outputs_dict['cell_idx'], data_idx)
 
-                ## TODO: In general we can write "sort-free" method path that is fast if batch-size == data-size.
-                ## e.g:
-                # if batch_size == n_current:
-                #   cdr_in_batch = [True] * len(outputs_dict['drug_idx'])
-
-                ## this identifies which of train/valid split is in ths current batch.
+                ## this identifies which of train/valid split is in the current batch.
                 out_idx_in_batch = out_idx[[cdr_in_batch[out_idx[i, 0]] for i in range(out_idx.shape[0])]]
+                if data_loaders['data_type'] == 'drug':
+                    mu, log_var, X_rec = d_mu, d_log_var, d_X_rec
+                    idx_for_mu_repeats_if_full_batch = outputs_dict['drug_idx'][out_idx_in_batch]
+                    idx_for_mu_repeats = np.vectorize(value_mapping.get)(idx_for_mu_repeats_if_full_batch)[:,0]
+                    idx_k_old = outputs_dict['drug_idx_k_init']
+                else:
+                    mu, log_var, X_rec = c_mu, c_log_var, c_X_rec
+                    idx_for_mu_repeats_if_full_batch = outputs_dict['cell_idx'][out_idx_in_batch]
+                    idx_for_mu_repeats = np.vectorize(value_mapping.get)(idx_for_mu_repeats_if_full_batch)[:,0]
+                    idx_k_old = outputs_dict['cell_idx_k_init']
+
 
                 ## update a mutable y-hat object with the batch-updates outputs:
                 y_hat_mutable[cdr_in_batch] = y_hat_mod.squeeze(-1)

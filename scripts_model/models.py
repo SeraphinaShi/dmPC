@@ -790,7 +790,7 @@ class VAE(nn.Module):
         return z
 
 
-class Predictor(nn.Module):
+class Predictor2(nn.Module):
     def __init__(self,
                  c_input_dim,
                  d_input_dim,

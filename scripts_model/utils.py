@@ -188,7 +188,11 @@ def prepare_model_IO(
         d_names_k,
         valid_size = 0.2,
         batch_size = None,
-        device = torch.device('cpu')
+        device = torch.device('cpu'),
+        train_row_idx_dict = {
+            'c_idx': None, #prespecification of cells to isolate fully as training.
+            'd_idx': None, #prespecification of drugs to isolate fully as training.
+        },
         ):
 
     ## Sort the data:
@@ -200,14 +204,20 @@ def prepare_model_IO(
         data_k = c_data.loc[c_data.index.isin(c_names_k)]
         ### corresponding cdr
         cdr_k = cdr_all.loc[cdr_all.c_name.isin(data_k.index.values)]
+        input_data = d_data
+        train_row_idx = train_row_idx_dict['d_idx']
 
     else: ## train_data_type == "cell"
         data_k = d_data.loc[d_data.index.isin(d_names_k)]
         ### corresponding cdr
         cdr_k = cdr_all.loc[cdr_all.d_name.isin(data_k.index.values)]
+        input_data = c_data
+        train_row_idx = train_row_idx_dict['c_idx']
 
+    n_items = input_data.shape[0]
     ### to wide
-    cdr_k_w_na = cdr_k.drop(columns=['c_name_encoded', 'd_name_encoded']).pivot(index='c_name', columns='d_name', values='cdr')
+    cdr_k_w_na = cdr_k.drop(columns=['c_name_encoded', 'd_name_encoded']).pivot(
+        index='c_name', columns='d_name', values='cdr')
 
     ## get idx of members of old clusters:
     cell_idx_k_init = [cdr_k_w_na.index.get_loc(row) for row in c_names_k]
@@ -222,56 +232,74 @@ def prepare_model_IO(
     cdr_k_w_na = cdr_k_w_na.flatten()
     cdr_coords_not_na = np.argwhere(~np.isnan(cdr_k_w_na))
 
-    ##---------------------
-    ## train, test split, collect all into dictionary
-    
-    if train_data_type == 'cell':
-        stratify_array = cell_drug_idx[:,0][cdr_coords_not_na]
-    else:
-        stratify_array = cell_drug_idx[:,1][cdr_coords_not_na]
-    # cdr_idx_train, cdr_idx_valid = train_test_split(
-    #    cdr_coords_not_na, test_size=valid_size,
-    #    stratify=stratify_array)
-
-    unique_classes = np.unique(stratify_array)
-    min_test_size = len(unique_classes) / len(stratify_array)
-
-    if min_test_size > valid_size:
-        print(f"Adjusting test_size from {valid_size} to {min_test_size} to accommodate all classes.")
-        valid_size = min_test_size
-    
-    cdr_idx_train, cdr_idx_valid = train_test_split(
-        cdr_coords_not_na, test_size=valid_size, stratify=stratify_array)
-
+    ## instantiate outputs dictionary.
     cdr_outputs_dict = {}
-    cdr_outputs_dict['cdr_vals'] = cdr_k_w_na
-    cdr_outputs_dict['cdr_idx_train'] = cdr_idx_train
-    cdr_outputs_dict['cdr_idx_valid'] = cdr_idx_valid
     cdr_outputs_dict['cell_idx'] = cell_drug_idx[:,0]
     cdr_outputs_dict['drug_idx'] = cell_drug_idx[:,1]
+
+    ##---------------------
+    ## train, test split, collect all into dictionary
+    if train_row_idx is None: ## ie, we instead use all the row items of input data for training.
+        if train_data_type == 'cell':
+            stratify_array = cell_drug_idx[:,0][cdr_coords_not_na]
+        else:
+            stratify_array = cell_drug_idx[:,1][cdr_coords_not_na]
+        
+        unique_classes = np.unique(stratify_array)
+        min_test_size = len(unique_classes) / len(stratify_array)
+
+        if min_test_size > valid_size:
+            print(f"Adjusting test_size from {valid_size} to {min_test_size} to accommodate all classes.")
+            valid_size = min_test_size
+        
+        cdr_idx_train, cdr_idx_valid = train_test_split(
+            cdr_coords_not_na, test_size=valid_size,
+            stratify=stratify_array)
+        
+        ## create data tensors (which are of all items in both cases)
+        train_data_Tensor = torch.FloatTensor(input_data.values).to(device)
+        valid_data_Tensor = torch.FloatTensor(input_data.values).to(device)
+        ## convert to desired class.
+        train_dataset = DatasetWithIndices(train_data_Tensor)
+        valid_dataset = DatasetWithIndices(valid_data_Tensor)
+    else: ## using pre-specified cell lines and compounds to get CDR idx.
+        ## get relevant possible CDR training positions:
+        if train_data_type == 'cell':        
+            w_na_cdr_idx_train = np.where(np.isin(cdr_outputs_dict['cell_idx'], train_row_idx))[0]
+        else: ## drug
+            w_na_cdr_idx_train = np.where(np.isin(cdr_outputs_dict['drug_idx'], train_row_idx))[0]
+        
+        cdr_idx_train = cdr_coords_not_na[np.isin(cdr_coords_not_na, w_na_cdr_idx_train)]
+        cdr_idx_valid = np.setdiff1d(cdr_coords_not_na, cdr_idx_train)
+        
+        valid_row_idx = np.setdiff1d(np.arange(n_items), train_row_idx)
+        train_data_Tensor = torch.FloatTensor(input_data.values[train_row_idx, :]).to(device)
+        valid_data_Tensor = torch.FloatTensor(input_data.values[valid_row_idx, :]).to(device)
+        ## convert to desired class.
+        train_dataset = DatasetWithIndices(train_data_Tensor, indices = train_row_idx)
+        valid_dataset = DatasetWithIndices(valid_data_Tensor, indices = valid_row_idx)
+
+    
+    if batch_size is None:
+        train_batch_size = train_data_Tensor.shape[0]
+        valid_batch_size = valid_data_Tensor.shape[0]
+    else:
+        train_batch_size, valid_batch_size = batch_size, batch_size
+
+    cdr_outputs_dict['cdr_vals'] = cdr_k_w_na
+    cdr_outputs_dict['cdr_idx_train'] = cdr_idx_train.reshape((-1, 1))
+    cdr_outputs_dict['cdr_idx_valid'] = cdr_idx_valid.reshape((-1, 1))
     cdr_outputs_dict['cell_idx_k_init'] = cell_idx_k_init
     cdr_outputs_dict['drug_idx_k_init'] = drug_idx_k_init
 
     
-    ## here is where we invoke only using one modality as "training items"
-    if train_data_type == "drug":
-        data_Tensor = torch.FloatTensor(d_data.values).to(device)
-    else:
-        data_Tensor = torch.FloatTensor(c_data.values).to(device)
-    
-    train_dataset = DatasetWithIndices(data_Tensor)
-    valid_dataset = DatasetWithIndices(data_Tensor)
-
-    if batch_size is None:
-        batch_size = data_Tensor.shape[0]
-
     X_trainDataLoader = DataLoader(
         dataset=train_dataset, 
-        batch_size=batch_size, 
+        batch_size=train_batch_size, 
         shuffle=True)
     X_validDataLoader = DataLoader(
         dataset=valid_dataset, 
-        batch_size=batch_size, 
+        batch_size=valid_batch_size, 
         shuffle=True)
 
     dataloaders = {
@@ -348,9 +376,12 @@ def get_D_sensitive(d_names, d_sens_cluster_k):
 
 
 class DatasetWithIndices(Dataset):
-    def __init__(self, data):
+    def __init__(self, data, indices=None):
         self.data = data
-        self.indices = list(range(len(data)))
+        if indices is None:
+            self.indices = list(range(len(data)))
+        else:
+            self.indices = indices
 
     def __len__(self):
         return len(self.data)

@@ -40,16 +40,8 @@ def bicluster_gauss_vae_loss(
     ## It is essentially just ignoring that the means are all equal to 0.
     recon_loss = reconstruction_loss_function(X_rec, X) ## same as before:
     
-    ## assumes \mu_0 = \mu_1
-    ## $$loss_{KLD} = 0.5 * {tr(\Sigma_1^{-1} \Sigma_0) - k + ln\frac{|\Sigma_1|}{|\Sigma_0|}}$$
-    ## estimated variances 
-    
-    # code_size = 20
-    # ## TODO: check with TFD implementation that the authors use.
-    # batch_var_avgs = torch.mean(log_var.exp(), dim=0)
-    # ones_latent_dim = torch.ones(mu.shape[1])
-    
-    # kld = 0.5 * (torch.sum(ones_latent_dim / batch_var_avgs) - code_size + torch.log(torch.prod(batch_var_avgs) / torch.prod(ones_latent_dim)))
+    ## Determine sample-based bicluster mu (for variance) and 
+    ##      compute out-of-cluster distance wrt the origin.
     rev_sensitive_vec = 1 - sensitive_vec
     
     if idx_of_sensitive.shape[0] <= 1:
@@ -90,24 +82,6 @@ def bicluster_gauss_vae_loss(
     if torch.isinf(kld).item() is True:
         print('stop check')
     
-    # centroids_expanded = tf.expand_dims(centroids, axis=0)
-    # code_expanded = tf.expand_dims(code, axis=1)
-    # dist_samples = code_expanded - centroids_expanded
-    # dist_samples_squared = tf.square(dist_samples)
-    # gates_assignments_expanded = tf.expand_dims(gates_assignments, axis=-1)
-    # dist_samples_mask = dist_samples_squared * gates_assignments_expanded
-
-    # std_unnormalized = tf.reduce_sum(dist_samples_mask, axis=0)
-    # normalizing_factors = tf.clip_by_value(tf.reduce_sum(gates_assignments_expanded, axis=0), 1, 1e20)
-    # std_normalized = std_unnormalized / normalizing_factors
-    # std_normalized = tf.where(tf.equal(std_normalized, 0.), tf.ones_like(std_normalized), std_normalized)
-    # kl_divergence_code_standard_gaussian = 0.5 * (
-    #     tf.reduce_sum(std_normalized, axis=1) - 
-    #     code_size * tf.ones(model_hparams['num_experts']) - 
-    #     tf.reduce_sum(tf.log(std_normalized), axis=1))
-    
-    # loss_kl_divergence_code_standard_gaussian = tf.reduce_mean(kl_divergence_code_standard_gaussian)
-
     return recon_loss, kld
 
 def c_cluster_mu_distance(mu, cluster_key):

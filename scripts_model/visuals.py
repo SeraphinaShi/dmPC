@@ -11,13 +11,11 @@ import torch
 
 def plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=1, k_sub=None, plot_save_path=''):
     
-    
     color_labels = np.array(list(map(str, c_meta_hist['code'].unique())))
     for b in range(n_rounds):
         color_labels = np.union1d(color_labels, c_meta_hist[f'code_b{b}'].unique())   
     color_values = sns.color_palette("Set2", 8)
     color_map = dict(zip(color_labels, color_values))
-    print(color_map)
 
     if  k_sub != None:
         color_labels_sub = c_meta_hist[f'code_b{n_rounds - 1}'].astype(str).values
@@ -301,7 +299,6 @@ def plot_c_PCA_latent_test(model, device, n_rounds, c_latent_list, c_train, c_te
     plt.show()
 
 
-
 def plot_d_PCA_latent_help(d_data, d_latent_list, d_sens_hist, n_rounds, k=1, k_sub=None, plot_save_path=''):
     
     color_labels = np.array(list(map(str, d_sens_hist['sensitive_k'].unique())))
@@ -388,8 +385,10 @@ def plot_d_PCA_latent_help(d_data, d_latent_list, d_sens_hist, n_rounds, k=1, k_
             pca_sub = PCA(n_components=5)
             pca_sub.fit(data_b_sub)
             components_sub = pca_sub.transform(data_b_sub)
+            
+            d_sens_hist_tmp = d_sens_hist[d_sens_hist[f'sensitive_k{k}_b{n_rounds-1}'] != 1]
 
-            ax[1, n_p].scatter(components_sub[:,0],components_sub[:,1], color = d_sens_hist[f'sensitive_k_sub_b{b}'].astype(str).map(color_map_sub))
+            ax[1, n_p].scatter(components_sub[:,0],components_sub[:,1], color = d_sens_hist_tmp[f'sensitive_k_sub_b{b}'].astype(str).map(color_map_sub))
             handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values_sub]
             ax[1, n_p].legend(handlelist, color_labels_sub, title="Updated cluster")
             ax[1, n_p].set_xlabel('pc1')
