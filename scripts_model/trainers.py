@@ -32,7 +32,7 @@ def train_CDPmodel_local_1round(
         c_data, d_data, cdr_org, 
         c_names_k_init, d_names_k_init, 
         sens_cutoff, group_id, 
-                params,
+        params,
         train_row_idx_dict = {
             'c_idx': None,
             'd_idx': None},
@@ -186,7 +186,7 @@ def train_CDPmodel_local_1round(
         cdr_all = cdr_all,
         c_names_k = c_names_k_init,
         d_names_k = d_name_sensitive_k,
-       train_row_idx_dict = train_row_idx_dict,
+        train_row_idx_dict = train_row_idx_dict,
         valid_size = valid_size, 
         batch_size = batch_size,
         device = device,
@@ -401,7 +401,7 @@ def train_CDPmodel_local(
                 ### Prepare various loss-related objects depending on the update modality:
                 data_idx_np = data_idx.numpy()
                 value_mapping = {data_idx_np[i]: i for i in range(data_idx_np.shape[0])}
-
+                
                 ## collect the overall out_idx by train/valid split:
                 if phase ==  'train':
                     out_idx = outputs_dict['cdr_idx_train']
@@ -435,13 +435,24 @@ def train_CDPmodel_local(
                 y = outputs_dict['cdr_vals'][out_idx_in_batch[:,0]]
                 
                 y_hat = y_hat_mutable[out_idx_in_batch[:,0]]
-                ## TODO: remove after done debugging.
+                
+                
+                if augment_positives:
+                    pos_idx = np.where(y)[0]
+                    neg_idx = np.where(1-y)[0]
+                    num_negs = y.shape[0] - len(pos_idx)
+                    aug_pos_idx = np.random.choice(pos_idx, num_negs, replace=True)
+                    aug_idx = np.concatenate((aug_pos_idx, neg_idx))
+                    y = y[aug_idx]
+                    y_hat = y_hat[aug_idx]
+                    idx_for_mu_repeats = idx_for_mu_repeats[aug_idx]
+                    
+                ## TODO: remove below when done debugging.
                 # print("YHAT MAX AND MIN========================================")
                 # print(torch.max(y_hat))
                 # print(torch.min(y_hat))
 
                 # compute loss
-                mse = nn.MSELoss(reduction="sum")
 
                 #   1. Prediction loss:
                 bce = nn.BCELoss(reduction="none")
@@ -461,21 +472,6 @@ def train_CDPmodel_local(
                 else:
                     prediction_loss = torch.mean(prediction_losses)
 
-
-                ### Prepare various loss-related objects depending on the update modality:
-                data_idx_np = data_idx.numpy()
-                value_mapping = {data_idx_np[i]: i for i in range(data_idx_np.shape[0])}
-
-                if data_loaders['data_type'] == 'drug':
-                    mu, log_var, X_rec = d_mu, d_log_var, d_X_rec
-                    idx_for_mu_repeats_if_full_batch = outputs_dict['drug_idx'][out_idx_in_batch]
-                    idx_for_mu_repeats = np.vectorize(value_mapping.get)(idx_for_mu_repeats_if_full_batch)[:,0]
-                    idx_k_old = outputs_dict['drug_idx_k_init']
-                else:
-                    mu, log_var, X_rec = c_mu, c_log_var, c_X_rec
-                    idx_for_mu_repeats_if_full_batch = outputs_dict['cell_idx'][out_idx_in_batch]
-                    idx_for_mu_repeats = np.vectorize(value_mapping.get)(idx_for_mu_repeats_if_full_batch)[:,0]
-                    idx_k_old = outputs_dict['cell_idx_k_init']
                     
                 # 2. the loss of latent spaces distances:
                 #     - distances of cells/drugs in the predicted sensitive group to the cluster centroid 
@@ -484,24 +480,29 @@ def train_CDPmodel_local(
                 sensitive = y_hat > sens_cutoff
                 sensitive = sensitive.long()
                 
-                ## TODO: remove below when done debugging.                
-                # print("Sensitive Proportion:::::::")
-                # print(torch.sum(sensitive) / sensitive.shape[0])
-                # print(torch.mean(y_hat))
-                # sens_k_act = np.zeros(len(data_idx))
-                # for i in range(len(data_idx)):
-                #         hat_mean = np.mean(y[idx_for_mu_repeats == i])
-                #         sens_k_act[i] = hat_mean > sens_cutoff
-                # print(np.sum(sens_k_act))
+                
+                ## TODO: remove below when done debugging.  
+                print("Sensitive Proportion:::::::")
+                print(torch.sum(sensitive) / sensitive.shape[0])
+                print(torch.mean(y_hat))
+                sens_k_act = np.zeros(len(data_idx))
+                for i in range(len(data_idx)):
+                        hat_mean = np.mean(y[idx_for_mu_repeats == i])
+                        sens_k_act[i] = hat_mean > sens_cutoff
+                print(np.sum(sens_k_act))
+                # if torch.sum(sensitive).numpy() == 0:
+                #     print("check losses now.")
                 ## TODO: remove above when done debugging.
                 
                 
                 mu_full = mu[idx_for_mu_repeats].squeeze(1)
                 latent_dist_loss = cluster_mu_distance(mu_full, sensitive)
+
                 
                 idx_of_sensitive = np.unique(idx_for_mu_repeats[np.where(sensitive)[0]])
                 
                 # 3. VAE loss: reconstruction loss & kld (can be contingent on the clusters.)
+                mse = nn.MSELoss(reduction="mean")
                 if use_mixture_kld is False:
                     recon_loss, kld = custom_vae_loss(
                         data, mu, log_var, X_rec, mse)
@@ -574,6 +575,7 @@ def train_CDPmodel_local(
                     optimizer.step()
 
                 # compute loss statistics in-batch
+                ## NOTE: here is where losses are initially tracked, we can see that they are including loss weights.
                 running_loss += loss.item()
                 running_prediction_loss += (predict_loss_weight * prediction_loss).item()   
                 running_update_overlap += (update_ratio_weight * overlap_loss)

@@ -199,7 +199,7 @@ def prepare_model_IO(
     c_data, d_data, cdr_all, _, _ = sort_cdr_data(
             c_data, d_data, cdr_all
         )
-
+    
     if train_data_type == "drug":
         data_k = c_data.loc[c_data.index.isin(c_names_k)]
         ### corresponding cdr
@@ -231,7 +231,7 @@ def prepare_model_IO(
     ## flatten and track non-missing values.
     cdr_k_w_na = cdr_k_w_na.flatten()
     cdr_coords_not_na = np.argwhere(~np.isnan(cdr_k_w_na))
-
+    
     ## instantiate outputs dictionary.
     cdr_outputs_dict = {}
     cdr_outputs_dict['cell_idx'] = cell_drug_idx[:,0]

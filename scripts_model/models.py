@@ -13,8 +13,6 @@ import itertools
 
 import traceback
 
-import random
-
 import copy
 from copy import deepcopy
 import logging
@@ -60,6 +58,11 @@ class CDPmodel(nn.Module):
         self.d_sds = [None] * self.K
         self.d_in_trainnig = []
         self.d_name_clusters_in_trainnig = [None] * self.K
+        
+        self.train_row_idx_dict = {
+            'c_idx': None,
+            'd_idx': None
+            }
 
         self.sens_cutoff = params['sens_cutoff']
         
@@ -252,14 +255,16 @@ class CDPmodel(nn.Module):
             
         return CDR_df
 
-    def fit(self, c_data, c_meta, d_data, cdr, train_params, n_rounds=3, search_subcluster = True, device='cpu', seed = 42):
-        random.seed(seed)
-        np.random.seed(seed)
-        
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
 
+    def fit(
+        self, 
+        c_data, c_meta, 
+        d_data, cdr, 
+        train_params, 
+        n_rounds=3, 
+        search_subcluster = True, 
+        device='cpu'):
+        
         c_meta_hist = c_meta.copy()
         d_sens_hist = pd.DataFrame() 
         losses_train_hist_list = []
@@ -273,6 +278,19 @@ class CDPmodel(nn.Module):
 
         self.c_in_trainnig = c_data.index.values
         self.d_in_trainnig = d_data.index.values
+        
+        ## pre-establish training cells and compounds, if specified
+        if train_params['use_all_items_for_latent_training'] is False:
+            self.train_row_idx_dict = {
+                'c_idx': np.sort(np.random.choice(
+                    c_data.shape[0], 
+                    round(c_data.shape[0] * (1 - train_params['valid_size'])),
+                    replace = False)),
+                'd_idx': np.sort(np.random.choice(
+                    d_data.shape[0], 
+                    round(d_data.shape[0] * (1 - train_params['valid_size'])),
+                    replace = False)),
+            }
 
         if search_subcluster:
             losses_train_hist_list_sub = []
@@ -293,9 +311,21 @@ class CDPmodel(nn.Module):
 
         # 1. Pre-train a C-VAE and D-VAE on all cells and compounds (no clustering loss).  Copy each k-times as each initial bi-cluster VAE.
         print(f"=> Initialize C-VAE:")
-        C_VAE, C_VAE_init_losses = train_VAE(self.CDPmodel_list[0].c_VAE, device, c_data, vae_type = "C", save_path = train_params['cVAE_save_path'], params=train_params)
+        C_VAE, C_VAE_init_losses = train_VAE(
+            self.CDPmodel_list[0].c_VAE, 
+            device, 
+            c_data, 
+            vae_type = "C", 
+            save_path = train_params['cVAE_save_path'], 
+            params=train_params)
         print(f"=> Initialize D-VAE:")
-        D_VAE, D_VAE_init_losses = train_VAE(self.CDPmodel_list[0].d_VAE, device, d_data, vae_type = "D", save_path = train_params['dVAE_save_path'], params=train_params)
+        D_VAE, D_VAE_init_losses = train_VAE(
+            self.CDPmodel_list[0].d_VAE, 
+            device, 
+            d_data, 
+            vae_type = "D", 
+            save_path = train_params['dVAE_save_path'], 
+            params=train_params)
 
         # Assign C-VAE and D-VAE to each CDP model
         # Copy over the parameters
@@ -312,12 +342,107 @@ class CDPmodel(nn.Module):
             print(f"  === {k}.1. Training local CDP model ")
             print(f"  ===================================")
 
-            (zero_cluster, c_latent_k, d_latent_k, d_sens_hist, c_meta_hist, 
-            losses_train_hist_list_k, best_epos_k, 
-            _,_,_,_,_,_,) = self.fit_k_nrounds(
-                k, n_rounds, cdr, c_data, c_meta, d_data, 
-                train_params, c_meta_hist, d_sens_hist, return_latents, device,
-                False)
+            losses_train_hist_list_k = []
+            best_epos_k = []
+
+            if return_latents:
+                c_latent_k = []
+                d_latent_k = []
+
+            if search_subcluster:
+                losses_train_hist_list_k_1 = []
+                best_epos_k_1 = []
+
+                if return_latents:
+                    c_latent_k_1 = []
+                    d_latent_k_1 = []
+
+            meta_key = "k" + str(k)
+            c_meta_k = c_meta[[meta_key]].rename(columns={meta_key:'key'})
+
+            # 1. Run the dual loop to train local models
+            for b in range(0, n_rounds):
+                print(f"     -- round {b} -------------")    
+ 
+                if b == 0:
+                    d_sens_hist[f'sensitive_k{k}'] = (cdr.loc[c_meta_k.index.values[c_meta_k.key == 1]].mean(axis=0) > self.sens_cutoff).astype(int)
+                    d_names_k_init = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}']==1]
+                else:
+                    d_names_k_init = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}_b{b-1}']==1]
+                
+                c_names_k_init = c_meta_k.index.values[c_meta_k.key == 1] 
+
+
+                (zero_cluster, self.CDPmodel_list[k], 
+                 c_centroid, d_centroid, c_sd, d_sd, 
+                 c_name_cluster_k, d_name_sensitive_k, 
+                 losses_train_hist, best_epos,) = train_CDPmodel_local_1round(
+                     self.CDPmodel_list[k], device, 
+                     ifsubmodel = False, 
+                     c_data = c_data, d_data = d_data, cdr_org = cdr, 
+                     c_names_k_init = c_names_k_init, d_names_k_init = d_names_k_init, 
+                     sens_cutoff = self.sens_cutoff, 
+                     group_id = k, 
+                     params = train_params,
+                     train_row_idx_dict = self.train_row_idx_dict,
+                     )
+                
+                ## update binarized column vectors of cell and drug sensitivity based on results.
+                c_meta_k, d_sens_k = create_bin_sensitive_dfs(
+                    c_data, d_data, c_name_cluster_k, d_name_sensitive_k
+                )
+
+                
+                if zero_cluster:
+                    # store/update the centroids
+                    self.c_centroids[k] = None
+                    self.c_sds[k] = None
+                    self.d_centroids[k] = None
+                    self.d_sds[k] = None
+                    self.c_name_clusters_in_trainnig[k] = None
+                    self.d_name_clusters_in_trainnig[k] = None
+
+                    # returns
+                    c_meta_hist[f'k{k}_b{b}'] = None
+                    d_sens_hist[f'sensitive_k{k}_b{b}'] = None
+                    losses_train_hist_list_k.append(None)
+                    best_epos_k.append(None)
+
+                    if return_latents:
+                        c_latent_k.append(None)
+                        d_latent_k.append(None)
+
+                    break
+
+                else:
+                    if b == n_rounds - 1:
+                        self.which_non_empty_cluster.append(k)
+                        self.nonzero_clusters += 1
+
+                    # store the centroids
+                    self.c_centroids[k] = c_centroid
+                    self.c_sds[k] = c_sd
+                    self.d_centroids[k] = d_centroid
+                    self.d_sds[k] = d_sd
+                    self.c_name_clusters_in_trainnig[k] = c_name_cluster_k
+                    self.d_name_clusters_in_trainnig[k] = d_name_sensitive_k
+
+                    # returns
+                    c_meta[meta_key] = c_meta_k.key
+                    c_meta_hist[f'k{k}_b{b}'] = c_meta_k.key
+                    d_sens_hist[f'sensitive_k{k}_b{b}'] = d_sens_k.sensitive
+                    losses_train_hist_list_k.append(losses_train_hist)
+                    best_epos_k.append(best_epos)
+
+                    if return_latents:
+                        c_latent = self.CDPmodel_list[k].c_VAE.encode(torch.from_numpy(c_data.values).float().to(device), repram=False)
+                        c_latent_k.append(c_latent.detach().numpy())
+                        d_latent = self.CDPmodel_list[k].d_VAE.encode(torch.from_numpy(d_data.values).float().to(device), repram=False)
+                        d_latent_k.append(d_latent.detach().numpy())
+                
+                ## Use multiprocessing to run the loop in parallel for each k
+                # with multiprocessing.Pool() as pool:
+                # s    pool.map(train_k, range(0, self.K))
             
             if k in self.which_non_empty_cluster:                    
                 losses_train_hist_list.append(losses_train_hist_list_k)
@@ -333,8 +458,11 @@ class CDPmodel(nn.Module):
                 if return_latents:
                     c_latent_list.append(None)
                     d_latent_list.append(None)
+
+            if zero_cluster:
+                break
             
-            if search_subcluster and not zero_cluster:
+            if search_subcluster:
                 # ---------------------------------------------
                 # 2. Run the dual loop again to find subclusters
                 print(f"  ===================================")
@@ -344,23 +472,86 @@ class CDPmodel(nn.Module):
                 self.CDPmodel_list_sub[k].load_state_dict(
                     self.CDPmodel_list[k].state_dict())
 
+                c_name_k_1 = self.c_name_clusters_in_trainnig[k]
                 d_name_k_1 = self.d_name_clusters_in_trainnig[k]
 
-                if not isinstance(d_name_k_1, list):
-                    d_name_k_1 = list(d_name_k_1)
-                    
                 d_data_1 = d_data.drop(d_name_k_1)
                 cdr_1 = cdr.drop(columns=d_name_k_1)
 
-                (zero_cluster_1, c_latent_k_1, d_latent_k_1, d_sens_hist, c_meta_hist, 
-                losses_train_hist_list_k_1, best_epos_k_1, 
-                c_centroids_sub, c_sds_sub, d_centroids_sub, d_sds_sub, 
-                c_name_clusters_in_trainnig_sub, d_name_clusters_in_trainnig_sub) = self.fit_k_nrounds(
-                    k, n_rounds, cdr_1, c_data, c_meta, d_data_1, 
-                    train_params, c_meta_hist, d_sens_hist, return_latents, device,
-                    True, c_centroids_sub, c_sds_sub, d_centroids_sub, d_sds_sub,
-                    c_name_clusters_in_trainnig_sub, d_name_clusters_in_trainnig_sub)
+                d_sens_hist_1 = pd.DataFrame() 
 
+                for b in range(0, n_rounds):
+                    print(f"     -- round {b} -------------")     
+
+                    if b == 0:
+                        d_sens_hist_1[f'sensitive_k{k}'] = (cdr_1.loc[c_meta_k.index.values[c_meta_k.key == 1]].mean(axis=0) > 0.5).astype(int)
+                        d_names_k_init_1 = d_sens_hist_1.index.values[d_sens_hist_1[f'sensitive_k{k}']==1]
+
+                        c_names_k_init_1 = c_name_k_1
+
+                        ## TODO: this feels quite arbitrary.
+                        sensitive_cut_off = 0.2
+                    else:
+                        d_names_k_init_1 = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}_sub_b{b-1}']==1]
+                        c_names_k_init_1 = c_meta_hist.index.values[c_meta_hist[f'k{k}_sub_b{b-1}']==1]
+
+                        sensitive_cut_off = self.sens_cutoff
+
+                    (zero_cluster_sub, self.CDPmodel_list_sub[k], 
+                     c_centroid_1, d_centroid_1, c_sd_1, d_sd_1, 
+                     c_name_cluster_k_1, d_name_sensitive_k_1, 
+                     losses_train_hist_1,
+                     best_epos_1,) = train_CDPmodel_local_1round(
+                            self.CDPmodel_list_sub[k], device, 
+                            ifsubmodel = True, 
+                            c_data = c_data, d_data = d_data_1, cdr_org = cdr_1, 
+                            c_names_k_init = c_names_k_init_1, 
+                            d_names_k_init = d_names_k_init_1, 
+                            sens_cutoff = sensitive_cut_off, 
+                            group_id = k, 
+                            params = train_params,
+                            train_row_idx_dict = self.train_row_idx_dict,)
+
+                    c_meta_k_1, d_sens_k_1 = create_bin_sensitive_dfs(
+                        c_data, d_data_1, 
+                        c_name_cluster_k_1, d_name_sensitive_k_1
+                    )
+
+                    if(zero_cluster_sub):
+                        print("  No subcluster found")
+
+                        losses_train_hist_list_k_1.append(None)
+                        best_epos_k.append(None)
+                        
+                        if return_latents:
+                            c_latent_k_1.append(None)
+                            d_latent_k_1.append(None)
+
+                        break
+                    else:
+
+                        if b == n_rounds - 1:
+                            self.which_non_empty_subcluster.append(k)
+
+                        # store/update the centroids
+                        c_centroids_sub[k] = c_centroid_1
+                        c_sds_sub[k] = c_sd_1
+                        d_centroids_sub[k] = d_centroid_1
+                        d_sds_sub[k] = d_sd_1
+                        c_name_clusters_in_trainnig_sub[k] = c_name_cluster_k_1
+                        d_name_clusters_in_trainnig_sub[k] = d_name_sensitive_k_1
+
+                        c_meta_hist[f'k{k}_sub_b{b}'] = c_meta_k_1.key
+                        d_sens_hist[f'sensitive_k{k}_sub_b{b}'] = d_sens_k_1.sensitive
+                        losses_train_hist_list_k_1.append(losses_train_hist_1)
+                        best_epos_k_1.append(best_epos_1)
+
+                        if return_latents:
+                            c_latent_1 = self.CDPmodel_list_sub[k].c_VAE.encode(torch.from_numpy(c_data.values).float().to(device), repram=False)
+                            c_latent_k_1.append(c_latent_1.detach().numpy())
+                            d_latent_1 = self.CDPmodel_list_sub[k].d_VAE.encode(torch.from_numpy(d_data.values).float().to(device), repram=False)
+                            d_latent_k_1.append(d_latent_1.detach().numpy())
+                
                 if k in self.which_non_empty_subcluster:
                     print(f"Subcluster found as cluster {self.original_K + self.which_non_empty_subcluster.index(k)}")
                     
@@ -382,7 +573,6 @@ class CDPmodel(nn.Module):
             raise ValueError("No Biclusters found for these data. Consider raising " +
                              "the number of epochs, to allow the predictor time to " + 
                              "fit small sensitive groups.")
-
         c_meta_hist = add_meta_code(c_meta_hist, self.K, n_rounds)
         d_sens_hist = add_sensk_to_d_sens_init(d_sens_hist, self.original_K)
         d_sens_hist = add_sensk_to_d_sens_hist(d_sens_hist, self.K, n_rounds)
@@ -440,161 +630,6 @@ class CDPmodel(nn.Module):
         else: 
             return c_meta, c_meta_hist, d_sens_hist, losses_train_hist_list, best_epos_list, C_VAE_init_losses, D_VAE_init_losses
 
-    def fit_k_nrounds(
-        self, k, n_rounds, cdr, c_data, c_meta, d_data, train_params, 
-        c_meta_hist, d_sens_hist, return_latents, device,
-        subcluster=False,
-        c_centroids_sub=None, c_sds_sub=None, d_centroids_sub=None, d_sds_sub=None, 
-        c_name_clusters_in_trainnig_sub=None, d_name_clusters_in_trainnig_sub=None):
-
-        meta_key = "k" + str(k)
-        c_meta_k = c_meta[[meta_key]].rename(columns={meta_key:'key'})
-
-        losses_train_hist_list_k = []
-        best_epos_k = []
-            
-        if return_latents:
-            c_latent_k = []
-            d_latent_k = []
-
-        if subcluster:
-            d_sens_hist_1 = pd.DataFrame()
-
-	    # 1. Run the dual loop to train local models
-        for b in range(0, n_rounds):
-            print(f"     -- round {b} -------------")    
- 
-            if b == 0:
-                if not subcluster:
-                    d_sens_hist[f'sensitive_k{k}'] = (cdr.loc[c_meta_k.index.values[c_meta_k.key == 1]].mean(axis=0) > self.sens_cutoff).astype(int)
-                    d_names_k_init = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}']==1]
-                    c_names_k_init = c_meta_k.index.values[c_meta_k.key == 1]
-                    sensitive_cut_off = self.sens_cutoff
-
-                else:
-                    d_sens_hist_1[f'sensitive_k{k}'] = (cdr.loc[c_meta_k.index.values[c_meta_k.key == 1]].mean(axis=0) > 0.5).astype(int)
-                    d_names_k_init = d_sens_hist_1.index.values[d_sens_hist_1[f'sensitive_k{k}']==1]
-                    c_names_k_init = self.c_name_clusters_in_trainnig[k]
-                    sensitive_cut_off = self.sens_cutoff/2
-            else:
-                if not subcluster:
-                    c_names_k_init = c_meta_k.index.values[c_meta_k.key == 1] 
-                    d_names_k_init = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}_b{b-1}']==1]
-                else:
-                    c_names_k_init = c_meta_hist.index.values[c_meta_hist[f'k{k}_sub_b{b-1}']==1]
-                    d_names_k_init = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}_sub_b{b-1}']==1]
-                
-                sensitive_cut_off = self.sens_cutoff
-
-            if not subcluster:
-                (zero_cluster, self.CDPmodel_list[k], 
-                c_centroid, d_centroid, c_sd, d_sd, 
-                c_name_cluster_k, d_name_sensitive_k, 
-                losses_train_hist, best_epos,) = train_CDPmodel_local_1round(
-                    self.CDPmodel_list[k], device, 
-                    ifsubmodel = False, 
-                    c_data = c_data, d_data = d_data, cdr_org = cdr, 
-                    c_names_k_init = c_names_k_init, d_names_k_init = d_names_k_init, 
-                    sens_cutoff = sensitive_cut_off, 
-                    group_id = k, 
-                    params = train_params
-                    )
-            else:
-                (zero_cluster, self.CDPmodel_list_sub[k], 
-                c_centroid, d_centroid, c_sd, d_sd, 
-                c_name_cluster_k, d_name_sensitive_k, 
-                losses_train_hist, best_epos,) = train_CDPmodel_local_1round(
-                    self.CDPmodel_list_sub[k], device, 
-                    ifsubmodel = True, 
-                    c_data = c_data, d_data = d_data, cdr_org = cdr, 
-                    c_names_k_init = c_names_k_init, 
-                    d_names_k_init = d_names_k_init, 
-                    sens_cutoff = sensitive_cut_off, 
-                    group_id = k, params = train_params)
-                
-            ## update binarized column vectors of cell and drug sensitivity based on results.
-            c_meta_k, d_sens_k = create_bin_sensitive_dfs(
-                c_data, d_data, c_name_cluster_k, d_name_sensitive_k
-            )
-                
-            if zero_cluster:
-                if not subcluster:
-                    # store/update the centroids
-                    self.c_centroids[k] = None
-                    self.c_sds[k] = None
-                    self.d_centroids[k] = None
-                    self.d_sds[k] = None
-                    self.c_name_clusters_in_trainnig[k] = None
-                    self.d_name_clusters_in_trainnig[k] = None
-
-                    # returns
-                    c_meta_hist[f'k{k}_b{b}'] = None
-                    d_sens_hist[f'sensitive_k{k}_b{b}'] = None
-                else:
-                    print("  No subcluster found")
-                        
-                losses_train_hist_list_k.append(None)
-                best_epos_k.append(None)
-
-                if return_latents:
-                    c_latent_k.append(None)
-                    d_latent_k.append(None)
-
-                break
-
-            else:
-                if b == n_rounds - 1:
-                    if not subcluster:
-                        self.which_non_empty_cluster.append(k)
-                        self.nonzero_clusters += 1
-                    else:
-                        self.which_non_empty_subcluster.append(k)
-
-                if not subcluster:
-                    # store the centroids
-                    self.c_centroids[k] = c_centroid
-                    self.c_sds[k] = c_sd
-                    self.d_centroids[k] = d_centroid
-                    self.d_sds[k] = d_sd
-                    self.c_name_clusters_in_trainnig[k] = c_name_cluster_k
-                    self.d_name_clusters_in_trainnig[k] = d_name_sensitive_k
-
-                    # returns
-                    c_meta[meta_key] = c_meta_k.key
-                    c_meta_hist[f'k{k}_b{b}'] = c_meta_k.key
-                    d_sens_hist[f'sensitive_k{k}_b{b}'] = d_sens_k.sensitive
-                    losses_train_hist_list_k.append(losses_train_hist)
-                    best_epos_k.append(best_epos)
-
-                    if return_latents:
-                        c_latent = self.CDPmodel_list[k].c_VAE.encode(torch.from_numpy(c_data.values).float().to(device), repram=False)
-                        c_latent_k.append(c_latent.detach().numpy())
-                        d_latent = self.CDPmodel_list[k].d_VAE.encode(torch.from_numpy(d_data.values).float().to(device), repram=False)
-                        d_latent_k.append(d_latent.detach().numpy())
-                else:
-                    # store/update the centroids
-                    c_centroids_sub[k] = c_centroid
-                    c_sds_sub[k] = c_sd
-                    d_centroids_sub[k] = d_centroid
-                    d_sds_sub[k] = d_sd
-                    c_name_clusters_in_trainnig_sub[k] = c_name_cluster_k
-                    d_name_clusters_in_trainnig_sub[k] = d_name_sensitive_k
-
-                    c_meta_hist[f'k{k}_sub_b{b}'] = c_meta_k.key
-                    d_sens_hist[f'sensitive_k{k}_sub_b{b}'] = d_sens_k.sensitive
-                    losses_train_hist_list_k.append(losses_train_hist)
-                    best_epos_k.append(best_epos)
-
-                    if return_latents:
-                        c_latent = self.CDPmodel_list_sub[k].c_VAE.encode(torch.from_numpy(c_data.values).float().to(device), repram=False)
-                        c_latent_k.append(c_latent.detach().numpy())
-                        d_latent = self.CDPmodel_list_sub[k].d_VAE.encode(torch.from_numpy(d_data.values).float().to(device), repram=False)
-                        d_latent_k.append(d_latent.detach().numpy())
-            
-        return (zero_cluster, c_latent_k, d_latent_k, 
-        d_sens_hist, c_meta_hist, losses_train_hist_list_k, best_epos_k, 
-        c_centroids_sub, c_sds_sub, d_centroids_sub, d_sds_sub, 
-        c_name_clusters_in_trainnig_sub, d_name_clusters_in_trainnig_sub)
 
 
 
@@ -643,15 +678,9 @@ class CDPmodel_sub(nn.Module):
         else:
             _, d_mu, d_log_var, d_Z, d_X_rec = self.d_VAE(d_X)
             
-
-        ## Run the predictor:
-        ## TODO: remove after debugging!
-        if torch.sum(torch.isnan(d_mu)).item() > 0:
-            print('check model')
-            _, d_mu, d_log_var, d_Z, d_X_rec = self.d_VAE(d_X)
-            traceback.print_stack()
-            
+        ## Run the predictor:  
         CDR = self.predictor(c_mu, d_mu)
+        
         return c_mu, c_log_var, c_X_rec, d_mu, d_log_var, d_X_rec, CDR
     
     def update_fixed_encoding(
@@ -790,7 +819,7 @@ class VAE(nn.Module):
         return z
 
 
-class Predictor2(nn.Module):
+class Predictor(nn.Module):
     def __init__(self,
                  c_input_dim,
                  d_input_dim,
@@ -800,25 +829,29 @@ class Predictor2(nn.Module):
         super(Predictor, self).__init__()
 
         hidden_dims = deepcopy(h_dims)
-        hidden_dims.insert(0, 2*sec_dim)
-    
-        self.cell_line_layer = nn.Sequential(
-            nn.Linear(c_input_dim, sec_dim),
-            nn.Dropout(drop_out),
-            nn.ReLU()
-        )
+        hidden_dims.insert(0, c_input_dim+d_input_dim)
+        
 
-        self.drug_layer = nn.Sequential(
-            nn.Linear(d_input_dim, sec_dim),
-            nn.Dropout(drop_out),
-            nn.ReLU()
-        )
+        ## TODO: this is commented during debugging
+        # hidden_dims.insert(0, sec_dim)
+        # self.cell_line_layer = nn.Sequential(
+        #     nn.Linear(c_input_dim, sec_dim),
+        #     nn.Dropout(drop_out),
+        #     nn.ReLU()
+        # )
+
+        # self.drug_layer = nn.Sequential(
+        #     nn.Linear(d_input_dim, sec_dim),
+        #     nn.Dropout(drop_out),
+        #     nn.ReLU()
+        # )
+        ## TODO: this is commented during debugging
 
         # Predictor
         modules_e = []
-        for i in range(2, len(hidden_dims)):
-            i_dim = hidden_dims[i-1]
-            o_dim = hidden_dims[i]
+        for i in range(len(hidden_dims)-1):
+            i_dim = hidden_dims[i]
+            o_dim = hidden_dims[i+1]
 
             modules_e.append(
                 nn.Sequential(
@@ -838,15 +871,16 @@ class Predictor2(nn.Module):
             
 
     def forward(self, c_latent: Tensor, d_latent: Tensor):
-        c = self.cell_line_layer(c_latent)
-        d = self.drug_layer(d_latent)
+        ## TODO: this is commented out during debugging:
+        # c = self.cell_line_layer(c_latent)
+        # d = self.drug_layer(d_latent)
 
         ### concatenate the vectors of each possible combination, in cell line order.
-        c_d1, c_d2 = c.shape
-        d_d1, d_d2 = d.shape
+        c_d1, c_d2 = c_latent.shape
+        d_d1, d_d2 = d_latent.shape
 
         combination = torch.cat(
-            [torch.repeat_interleave(c, repeats=d_d1, dim=0), d.repeat(c_d1, 1), ]
+            [torch.repeat_interleave(c_latent, repeats=d_d1, dim=0), d_latent.repeat(c_d1, 1), ]
             , dim=-1,
         )
 

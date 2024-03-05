@@ -39,7 +39,7 @@ def bicluster_gauss_vae_loss(
     ## This 'mixture of Gaussians' KLD is taken from https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1009086 
     ## It is essentially just ignoring that the means are all equal to 0.
     recon_loss = reconstruction_loss_function(X_rec, X) ## same as before:
-    
+
     ## Determine sample-based bicluster mu (for variance) and 
     ##      compute out-of-cluster distance wrt the origin.
     rev_sensitive_vec = 1 - sensitive_vec
@@ -81,7 +81,7 @@ def bicluster_gauss_vae_loss(
     
     if torch.isinf(kld).item() is True:
         print('stop check')
-    
+
     return recon_loss, kld
 
 def c_cluster_mu_distance(mu, cluster_key):
