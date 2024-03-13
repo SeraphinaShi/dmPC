@@ -1,3 +1,4 @@
+from calendar import c
 import os
 import pandas as pd
 from scipy.stats import pearsonr
@@ -33,7 +34,7 @@ def plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=1, k_
     if k_sub == None:
         fig, ax = plt.subplots(nrows=1, ncols=n_pics, figsize=(n_pics*5, 5))
 
-        ax[0].scatter(components[:,0],components[:,1], color=c_meta_hist['code'].astype(str).map(color_map))
+        ax[0].scatter(components[:,0],components[:,1], c=c_meta_hist['code'].astype(str).map(color_map))
         handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
         ax[0].legend(handlelist, color_labels, title="Prior cluster")
         ax[0].set_xlabel('pc1')
@@ -48,7 +49,7 @@ def plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=1, k_
             pca.fit(data_b)
             components = pca.transform(data_b)
 
-            ax[n_p].scatter(components[:,0],components[:,1], color = c_meta_hist[f'code_b{b}'].astype(str).map(color_map))
+            ax[n_p].scatter(components[:,0],components[:,1], c = c_meta_hist[f'code_b{b}'].astype(str).map(color_map))
             handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
             ax[n_p].legend(handlelist, color_labels, title="Updated cluster")
             ax[n_p].set_xlabel('pc1')
@@ -57,14 +58,14 @@ def plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=1, k_
     else:
         fig, ax = plt.subplots(nrows=2, ncols=n_pics, figsize=(n_pics*5, 2*5))
 
-        ax[0,0].scatter(components[:,0],components[:,1], color=c_meta_hist['code'].astype(str).map(color_map))
+        ax[0,0].scatter(components[:,0],components[:,1], c=c_meta_hist['code'].astype(str).map(color_map))
         handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
         ax[0,0].legend(handlelist, color_labels, title="Prior cluster")
         ax[0,0].set_xlabel('pc1')
         ax[0,0].set_ylabel('pc2')
         ax[0,0].set_title(f'PCA on input data (k={k})')
 
-        ax[1,0].scatter(components[:,0],components[:,1], color=c_meta_hist[f'code_b{n_rounds-1}'].astype(str).map(color_map_sub))
+        ax[1,0].scatter(components[:,0],components[:,1], c=c_meta_hist[f'code_b{n_rounds-1}'].astype(str).map(color_map_sub))
         handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values_sub]
         ax[1,0].legend(handlelist, color_labels_sub, title="Prior cluster")
         ax[1,0].set_xlabel('pc1')
@@ -80,7 +81,7 @@ def plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=1, k_
             pca.fit(data_b)
             components = pca.transform(data_b)
 
-            ax[0, n_p].scatter(components[:,0],components[:,1], color = c_meta_hist[f'code_b{b}'].astype(str).map(color_map))
+            ax[0, n_p].scatter(components[:,0],components[:,1], c = c_meta_hist[f'code_b{b}'].astype(str).map(color_map))
             handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
             ax[0, n_p].legend(handlelist, color_labels, title="Updated cluster")
             ax[0, n_p].set_xlabel('pc1')
@@ -93,7 +94,7 @@ def plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=1, k_
             pca_sub.fit(data_b_sub)
             components_sub = pca_sub.transform(data_b_sub)
 
-            ax[1, n_p].scatter(components_sub[:,0],components_sub[:,1], color = c_meta_hist[f'code_sub_b{b}'].astype(str).map(color_map_sub))
+            ax[1, n_p].scatter(components_sub[:,0],components_sub[:,1], c = c_meta_hist[f'code_sub_b{b}'].astype(str).map(color_map_sub))
             handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values_sub]
             ax[1, n_p].legend(handlelist, color_labels_sub, title="Updated cluster")
             ax[1, n_p].set_xlabel('pc1')

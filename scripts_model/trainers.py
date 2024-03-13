@@ -346,8 +346,8 @@ def train_CDPmodel_local(
 
     for epoch in range(n_epochs):
         ## TODO: remove below after debugging
-        if epoch % 10 == 0:
-            print(epoch)
+        # if epoch % 10 == 0:
+            # print(epoch)
         ## TODO: remove above after debugging
         ## logging ifo
         logging.info('Epoch {}/{}'.format(epoch, n_epochs - 1))
@@ -482,14 +482,14 @@ def train_CDPmodel_local(
                 
                 
                 ## TODO: remove below when done debugging.  
-                print("Sensitive Proportion:::::::")
-                print(torch.sum(sensitive) / sensitive.shape[0])
-                print(torch.mean(y_hat))
+                # print("Sensitive Proportion:::::::")
+                # print(torch.sum(sensitive) / sensitive.shape[0])
+                # print(torch.mean(y_hat))
                 sens_k_act = np.zeros(len(data_idx))
                 for i in range(len(data_idx)):
                         hat_mean = np.mean(y[idx_for_mu_repeats == i])
                         sens_k_act[i] = hat_mean > sens_cutoff
-                print(np.sum(sens_k_act))
+                # print(np.sum(sens_k_act))
                 # if torch.sum(sensitive).numpy() == 0:
                 #     print("check losses now.")
                 ## TODO: remove above when done debugging.

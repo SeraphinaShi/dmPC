@@ -516,7 +516,7 @@ class CDPmodel(nn.Module):
                     d_sens_hist_1[f'sensitive_k{k}'] = (cdr.loc[c_meta_k.index.values[c_meta_k.key == 1]].mean(axis=0) > 0.5).astype(int)
                     d_names_k_init = d_sens_hist_1.index.values[d_sens_hist_1[f'sensitive_k{k}']==1]
                     c_names_k_init = self.c_name_clusters_in_trainnig[k]
-                    sensitive_cut_off = self.sens_cutoff/2
+                    sensitive_cut_off = self.sens_cutoff/1.5
             else:
                 if not subcluster:
                     c_names_k_init = c_meta_k.index.values[c_meta_k.key == 1] 

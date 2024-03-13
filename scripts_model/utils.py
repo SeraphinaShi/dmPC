@@ -438,7 +438,8 @@ def add_meta_code(df: np.ndarray, K: int, B: int) -> pd.DataFrame:
     
         for k in range(K):
             col_name = f'k{k}_b{b}'
-            code_column[df[col_name] == 1] += str(k) + ' & '
+            if col_name in df.columns:
+                code_column[df[col_name] == 1] += str(k) + ' & '
             
         code_column = code_column.str.rstrip(' & ')
         code_column = code_column.replace('', '-1')
@@ -455,7 +456,8 @@ def add_meta_code_with_subcluster(df: np.ndarray, K: int, B: int) -> pd.DataFram
     
         for k in range(K):
             col_name = f'k{k}_b{b}'
-            code_column[df[col_name] == 1] += str(k) + ' & '
+            if col_name in df.columns:
+                code_column[df[col_name] == 1] += str(k) + ' & '
             
         code_column = code_column.str.rstrip(' & ')
         code_column = code_column.replace('', '-1')
@@ -472,8 +474,8 @@ def add_sensk_to_d_sens_init(df: np.ndarray, K: int) -> pd.DataFrame:
     b = -1
     for k in range(K):
         col_name = f'sensitive_k{k}'
-            
-        code_column[df[col_name] == 1] += str(k) + ' & '
+        if col_name in df.columns:
+            code_column[df[col_name] == 1] += str(k) + ' & '
             
     code_column = code_column.str.rstrip(' & ')
     code_column = code_column.replace('', '-1')
@@ -490,8 +492,8 @@ def add_sensk_to_d_sens_hist(df: np.ndarray, K: int, B: int) -> pd.DataFrame:
         
         for k in range(K):
             col_name = f'sensitive_k{k}_b{b}'
-            
-            code_column[df[col_name] == 1] += str(k) + ' & '
+            if col_name in df.columns:
+                code_column[df[col_name] == 1] += str(k) + ' & '
             
         code_column = code_column.str.rstrip(' & ')
         code_column = code_column.replace('', '-1')
@@ -508,8 +510,8 @@ def add_sensk_to_d_sens_hist_with_subcluster(df: np.ndarray, K: int, B: int) -> 
         
         for k in range(K):
             col_name = f'sensitive_k{k}_b{b}'
-            
-            code_column[df[col_name] == 1] += str(k) + ' & '
+            if col_name in df.columns:
+                code_column[df[col_name] == 1] += str(k) + ' & '
             
         code_column = code_column.str.rstrip(' & ')
         code_column = code_column.replace('', '-1')
