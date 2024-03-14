@@ -98,7 +98,7 @@ def plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=1, k_
             ax[1, n_p].legend(handlelist, color_labels_sub, title="Updated cluster")
             ax[1, n_p].set_xlabel('pc1')
             ax[1, n_p].set_xlabel('pc2')
-            ax[1, n_p].set_title(f'PCA on latent space in round {b}, (k={k})')
+            ax[1, n_p].set_title(f'PCA on latent space in round {b}, (k={k_sub})')
 
     # Plot c_data
 
@@ -167,14 +167,17 @@ def plot_c_PCA_latent_old(c_data, c_latent_list, c_meta_hist, n_rounds, legend_t
     plt.show()
 
 
+
 def plot_c_PCA_latent_test(model, device, n_rounds, c_latent_list, c_train, c_test, cdr_train_rslt_cluster, cdr_test_rslt_cluster, k=1, plot_save_path=''):
 
     if k == -1:
         # prepare data
         c_data = pd.concat([c_train, c_test])
     else:
-        c_latent_test = model.CDPmodel_list[k].c_VAE.encode(torch.from_numpy(c_test.values).float().to(device), repram=False)
-        c_latent_test = c_latent_test.detach().numpy()
+        c_test_data = torch.from_numpy(c_test.values).float().to(device)
+        model.CDPmodel_list[k] = model.CDPmodel_list[k].to(device)
+        c_latent_test = model.CDPmodel_list[k].c_VAE.encode(c_test_data, repram=False)
+        c_latent_test = c_latent_test.detach().cpu().numpy()
         c_latent_train = c_latent_list[k][n_rounds-1]
 
         c_latent = np.vstack((c_latent_train, c_latent_test))
@@ -289,6 +292,7 @@ def plot_c_PCA_latent_test(model, device, n_rounds, c_latent_list, c_train, c_te
         plt.savefig(plot_save_path, dpi=300)
         
     plt.show()
+
 
 
 

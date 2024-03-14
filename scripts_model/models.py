@@ -1,4 +1,5 @@
 from cmath import nan
+# import selectors
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,6 +17,8 @@ import copy
 from copy import deepcopy
 import logging
 import os
+
+
 
 import multiprocessing
 
@@ -58,7 +61,7 @@ class CDPmodel(nn.Module):
         self.sens_cutoff = params['sens_cutoff']
         
 
-    def forward(self, c_X, d_X, c_name: object = '', d_name: object = '', k: int = -1, sd_scale: float = 3):
+    def forward(self, c_X, d_X, c_name: object = '', d_name: object = '', k: int = -1, sd_scale: float = 3, device = 'cpu'):
         if not isinstance(c_X, torch.Tensor):
                 c_X = torch.FloatTensor(c_X.values)
         if not isinstance(c_X, torch.Tensor):
@@ -79,11 +82,12 @@ class CDPmodel(nn.Module):
                 c_dists = []
                 for k_itr in self.which_non_empty_cluster:
                     c_mu = self.CDPmodel_list[k_itr].c_VAE.encode(c_X, repram=False)
-                    is_outlier = ((c_mu - self.c_centroids[k_itr]).abs() > sd_scale * self.c_sds[k_itr]).any().item()
+                    dist = c_mu.to(device) - self.c_centroids[k_itr].to(device)
+                    is_outlier = (dist.abs() > sd_scale * self.c_sds[k_itr].to(device)).any().item()
                     if is_outlier:
                         c_dist_k = torch.tensor(float('inf'))
                     else: 
-                        c_dist_k = ((c_mu - self.c_centroids[k_itr]) / (self.c_sds[k_itr])).norm()
+                        c_dist_k = (dist / (self.c_sds[k_itr].to(device))).norm()
                     c_dists.append(c_dist_k)
 
                 stacked_c_dists = torch.stack(c_dists)
@@ -96,12 +100,13 @@ class CDPmodel(nn.Module):
                 if len(self.cluster_id_for_subcluster) > 0:
                     c_sub_dists = []
                     for k_sub_itr in self.cluster_id_for_subcluster:
-                        c_sub_mu = self.CDPmodel_list[k_sub_itr].c_VAE.encode(c_X, repram=False)
-                        is_outlier = ((c_sub_mu - self.c_centroids[k_sub_itr]).abs() > sd_scale * self.c_sds[k_sub_itr]).any().item()
+                        c_sub_mu = self.CDPmodel_list[k_sub_itr].c_VAE.encode(c_X, repram=False).to(device)
+                        dist = c_sub_mu - self.c_centroids[k_sub_itr].to(device)
+                        is_outlier = (dist.abs() > sd_scale * self.c_sds[k_sub_itr].to(device)).any().item()
                         if is_outlier:
                             c_sub_dist_k = torch.tensor(float('inf'))
                         else: 
-                            c_sub_dist_k = ((c_sub_mu - self.c_centroids[k_sub_itr]) / (self.c_sds[k_sub_itr])).norm()
+                            c_sub_dist_k = (dist / (self.c_sds[k_sub_itr].to(device))).norm()
                         c_sub_dists.append(c_sub_dist_k)
 
                     stacked_c_sub_dists = torch.stack(c_sub_dists)
@@ -125,12 +130,13 @@ class CDPmodel(nn.Module):
                 # search through clusters
                 d_dists = []
                 for k_itr in self.which_non_empty_cluster:
-                    d_mu = self.CDPmodel_list[k_itr].d_VAE.encode(d_X, repram=False)
-                    is_outlier = ((d_mu - self.d_centroids[k_itr]).abs() > sd_scale * self.d_sds[k_itr]).any().item()
+                    d_mu = self.CDPmodel_list[k_itr].d_VAE.encode(d_X, repram=False).to(device).to(device)
+                    dist = d_mu - self.d_centroids[k_itr].to(device)
+                    is_outlier = (dist.abs() > sd_scale * self.d_sds[k_itr].to(device)).any().item()
                     if is_outlier:
                         d_dist_k = torch.tensor(float('inf'))
                     else: 
-                        d_dist_k = ((d_mu - self.d_centroids[k_itr]) / (self.d_sds[k_itr])).norm()
+                        d_dist_k = (dist / (self.d_sds[k_itr].to(device))).norm()
                     d_dists.append(d_dist_k)
 
                 stacked_d_dists = torch.stack(d_dists)
@@ -143,11 +149,12 @@ class CDPmodel(nn.Module):
                 d_sub_dists = []
                 for k_sub_itr in self.cluster_id_for_subcluster:
                     d_sub_mu = self.CDPmodel_list[k_sub_itr].d_VAE.encode(d_X, repram=False)
-                    is_outlier = ((d_sub_mu - self.d_centroids[k_sub_itr]).abs() > sd_scale * self.d_sds[k_sub_itr]).any().item()
+                    dist = d_sub_mu.to(device) - self.d_centroids[k_sub_itr].to(device)
+                    is_outlier = (dist.abs() > sd_scale * self.d_sds[k_sub_itr].to(device)).any().item()
                     if is_outlier:
                         d_sub_dist_k = torch.tensor(float('inf'))
                     else: 
-                        d_sub_dist_k = ((d_sub_mu - self.d_centroids[k_sub_itr]) / (self.d_sds[k_sub_itr])).norm()
+                        d_sub_dist_k = (dist / (self.d_sds[k_sub_itr].to(device))).norm()
                     d_sub_dists.append(d_sub_dist_k)
 
                 stacked_d_sub_dists = torch.stack(d_sub_dists)
@@ -170,10 +177,10 @@ class CDPmodel(nn.Module):
             
             for k in cd_clusters:
                 if k != -1:
-                    CDR_temp = self.predict_given_model(self.CDPmodel_list[k], c_X, d_X)
+                    CDR_temp = self.predict_given_model(self.CDPmodel_list[k], c_X, d_X, device)
                     CDR_tmp_list.append(CDR_temp)
                     
-                    if (k in c_cluster and k in d_cluster) or CDR_temp >= 0.5:
+                    if (k in c_cluster and k in d_cluster) or CDR_temp >= self.sens_cutoff:
                         cluster_tmp_list.append(k)
                     else:
                         cluster_tmp_list.append(None)
@@ -193,163 +200,26 @@ class CDPmodel(nn.Module):
             c_cluster = format_list_as_string(c_cluster)
             d_cluster = format_list_as_string(d_cluster)
             
-            ##########################
-            # # old method
-            # if c_name in self.c_in_trainnig:
-            #     CDR = 0
-            #     cluster = -1
-            #     for k_itr in (self.which_non_empty_cluster + self.cluster_id_for_subcluster):
-            #         if c_name in self.c_name_clusters_in_trainnig[k_itr]: # or d_name in self.d_name_clusters_in_trainnig[k_itr]:
-            #             CDR_temp = self.predict_given_model(self.CDPmodel_list[k_itr], c_X, d_X)
-                    
-
-            #             if cluster == -1:
-            #                 cluster = k_itr
-            #                 CDR = CDR_temp
-            #             else:
-            #                 cluster = str(cluster) + " & " + str(k_itr)
-            #                 CDR = str(CDR) + " & " + str(CDR_temp)
-
-            # else:
-            #     c_dists = []
-            #     for k_itr in self.which_non_empty_cluster:
-            #         c_mu = self.CDPmodel_list[k_itr].c_VAE.encode(c_X, repram=False)
-            #         is_outlier = ((c_mu - self.c_centroids[k_itr]).abs() > sd_scale * self.c_sds[k_itr]).any().item()
-            #         if is_outlier:
-            #             c_dist_k = torch.tensor(float('inf'))
-            #         else: 
-            #             c_dist_k = ((c_mu - self.c_centroids[k_itr]) / (self.c_sds[k_itr])).norm()
-            #         c_dists.append(c_dist_k)
-
-            #     stacked_c_dists = torch.stack(c_dists)
-            #     # print(stacked_c_dists.detach().numpy())
-            #     if stacked_c_dists.min().item() < float('inf'):
-
-            #         cluster = torch.argmin(stacked_c_dists).item()
-            #         CDR = self.predict_given_model(self.CDPmodel_list[cluster], c_X, d_X)
-
-            #         if cluster in self.which_non_empty_subcluster:
-            #             k_itr_sub = self.cluster_id_for_subcluster[self.which_non_empty_subcluster.index(k_itr)]
-
-            #             c_mu = self.CDPmodel_list[k_itr_sub].c_VAE.encode(c_X, repram=False)
-            #             is_outlier = ((c_mu - self.c_centroids[k_itr_sub]).abs() > sd_scale * self.c_sds[k_itr_sub]).any().item()
-            #             if not is_outlier:
-            #                 CDR_temp = self.predict_given_model(self.CDPmodel_list[k_itr_sub], c_X, d_X)
-            #                 cluster = str(cluster) + " & " + str(k_itr_sub)
-            #                 CDR = str(CDR) + " & " + str(CDR_temp)
-
-            #     else:
-            #         cluster = -1
-            #         CDR = None
-            
-            ##########################
-            # # old method
-            # if c_name in self.c_in_trainnig and d_name in self.d_in_trainnig:
-            #     CDR = 0
-            #     cluster = -1
-            #     for k_itr in self.which_non_empty_cluster:
-            #         if c_name in self.c_name_clusters_in_trainnig[k_itr] and d_name in self.d_name_clusters_in_trainnig[k_itr]:
-            #             CDR_temp = self.predict_given_model(self.CDPmodel_list[k_itr], c_X, d_X)
-
-            #             if cluster == -1:
-            #                 cluster = k_itr
-            #                 CDR = CDR_temp
-            #             else:
-            #                 cluster = str(cluster) + " & " + str(k_itr)
-            #                 CDR = str(CDR) + " & " + str(CDR_temp)
-                    
-            #             if k_itr in self.which_non_empty_subcluster:
-            #                 k_itr_sub = self.cluster_id_for_subcluster[self.which_non_empty_subcluster.index(k_itr)]
-            #                 if c_name in self.c_name_clusters_in_trainnig[k_itr_sub] or d_name in self.d_name_clusters_in_trainnig[k_itr_sub]:
-
-            #                     CDR_temp = self.predict_given_model(self.CDPmodel_list[k_itr_sub], c_X, d_X)
-            #                     if cluster == -1:
-            #                         cluster = k_itr_sub
-            #                         CDR = CDR_temp
-            #                     else:
-            #                         cluster = str(cluster) + " & " + str(k_itr_sub)
-            #                         CDR = str(CDR) + " & " + str(CDR_temp)
-
-            # elif (c_name in self.c_in_trainnig and d_name not in self.d_in_trainnig) or (c_name not in self.c_in_trainnig and d_name in self.d_in_trainnig):
-            #     CDR = 0
-            #     cluster = -1
-            #     for k_itr in self.which_non_empty_cluster:
-                    
-            #         if c_name in self.c_name_clusters_in_trainnig[k_itr] or d_name in self.d_name_clusters_in_trainnig[k_itr]:
-            #             CDR_temp = self.predict_given_model(self.CDPmodel_list[k_itr], c_X, d_X)
-
-            #             if cluster == -1:
-            #                 CDR = CDR_temp
-            #                 if CDR_temp > 0.5:
-            #                     cluster = k_itr
-            #             else:
-            #                 if CDR_temp > 0.5:
-            #                     cluster = str(cluster) + " & " + str(k_itr)
-            #                     CDR = str(CDR) + " & " + str(CDR_temp)
-                    
-            #             if k_itr in self.which_non_empty_subcluster:
-            #                 k_itr_sub = self.cluster_id_for_subcluster[self.which_non_empty_subcluster.index(k_itr)]
-            #                 if c_name in self.c_name_clusters_in_trainnig[k_itr_sub] or d_name in self.d_name_clusters_in_trainnig[k_itr_sub]:
-
-            #                     CDR_temp = self.predict_given_model(self.CDPmodel_list[k_itr_sub], c_X, d_X)
-            #                     if cluster == -1:
-            #                         CDR = CDR_temp
-            #                         if CDR_temp > 0.5:
-            #                             cluster = k_itr_sub
-            #                     else:
-            #                         if CDR_temp > 0.5:
-            #                             cluster = str(cluster) + " & " + str(k_itr_sub)
-            #                             CDR = str(CDR) + " & " + str(CDR_temp)
-
-            # else:
-            #     c_dists = []
-            #     for k_itr in self.which_non_empty_cluster:
-            #         c_mu = self.CDPmodel_list[k_itr].c_VAE.encode(c_X, repram=False)
-            #         is_outlier = ((c_mu - self.c_centroids[k_itr]).abs() > sd_scale * self.c_sds[k_itr]).any().item()
-            #         if is_outlier:
-            #             c_dist_k = torch.tensor(float('inf'))
-            #         else: 
-            #             c_dist_k = ((c_mu - self.c_centroids[k_itr]) / (self.c_sds[k_itr])).norm()
-            #         c_dists.append(c_dist_k)
-
-            #     stacked_c_dists = torch.stack(c_dists)
-            #     # print(stacked_c_dists.detach().numpy())
-            #     if stacked_c_dists.min().item() < float('inf'):
-            #         cluster = torch.argmin(stacked_c_dists).item()
-            #         CDR = self.predict_given_model(self.CDPmodel_list[cluster], c_X, d_X)
-
-            #         if cluster in self.which_non_empty_subcluster:
-            #             k_itr_sub = self.cluster_id_for_subcluster[self.which_non_empty_subcluster.index(k_itr)]
-
-            #             c_mu = self.CDPmodel_list[k_itr_sub].c_VAE.encode(c_X, repram=False)
-            #             is_outlier = ((c_mu - self.c_centroids[k_itr]).abs() > sd_scale * self.c_sds[k_itr]).any().item()
-            #             if not is_outlier:
-            #                 CDR_temp = self.predict_given_model(self.CDPmodel_list[k_itr_sub], c_X, d_X)
-            #                 cluster = str(cluster) + " & " + str(k_itr)
-            #                 CDR = str(CDR) + " & " + str(CDR_temp)
-
-            #     else:
-            #         cluster = -1
-            #         CDR = None
         else:
             cluster = k
             c_cluster = k
             d_cluster = k
-            CDR = self.predict_given_model(self.CDPmodel_list[cluster], c_X, d_X)
+            CDR = self.predict_given_model(self.CDPmodel_list[cluster], c_X, d_X, device)
 
         return CDR, cluster, c_cluster, d_cluster
 
 
-    def predict_given_model(self, local_model, c_X: pd.DataFrame, d_X: pd.DataFrame):
-        c_mu = local_model.c_VAE.encode(c_X, repram=False)
-        d_mu = local_model.d_VAE.encode(d_X, repram=False)
-        CDR_temp = local_model.predictor(c_mu, d_mu)
+    def predict_given_model(self, local_model, c_X: pd.DataFrame, d_X: pd.DataFrame, device = 'cpu'):
+        local_model = local_model.to(device)
+        c_mu = local_model.c_VAE.encode(c_X.to(device), repram=False).to(device)
+        d_mu = local_model.d_VAE.encode(d_X.to(device), repram=False).to(device)
+        CDR_temp = local_model.predictor(c_mu, d_mu).to(device)
         CDR_temp = round(CDR_temp.item(), 6)
             
         return CDR_temp
 
 
-    def predict(self, c_X: pd.DataFrame, d_X: pd.DataFrame, k: int = -1, sd_scale: float = 3):
+    def predict(self, c_X: pd.DataFrame, d_X: pd.DataFrame, k: int = -1, sd_scale: float = 3, device = 'cpu'):
         c_names = c_X.index.values
         d_names = d_X.index.values
         combinations = list(itertools.product(c_names, d_names))
@@ -367,7 +237,7 @@ class CDPmodel(nn.Module):
             c_X_tensor = torch.from_numpy(c_X.loc[c_name].values).float().view(1, -1)
             d_X_tensor = torch.from_numpy(d_X.loc[d_name].values).float().view(1, -1)
 
-            cdr_hat, cluster,c_cluster, d_cluster = self(c_X_tensor, d_X_tensor, c_name, d_name, k, sd_scale = sd_scale)
+            cdr_hat, cluster,c_cluster, d_cluster = self(c_X_tensor, d_X_tensor, c_name, d_name, k, sd_scale = sd_scale, device = device)
 
             if isinstance(cdr_hat, str):
                 numbers = [float(num.strip()) for num in cdr_hat.split(' & ')]
@@ -462,14 +332,18 @@ class CDPmodel(nn.Module):
                 if b == 0:
                     d_sens_hist[f'sensitive_k{k}'] = (cdr.loc[c_meta_k.index.values[c_meta_k.key == 1]].mean(axis=0) > self.sens_cutoff).astype(int)
                     d_names_k_init = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}']==1]
+
+                    sensitive_cut_off = 0.35
                 else:
                     d_names_k_init = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}_b{b-1}']==1]
-                
-                c_names_k_init = c_meta_k.index.values[c_meta_k.key == 1] 
 
-                zero_cluster, self.CDPmodel_list[k], c_centroid, d_centroid, c_sd, d_sd, c_name_cluster_k, d_name_sensitive_k, losses_train_hist, \
+                    sensitive_cut_off = self.sens_cutoff
+                
+                c_names_k_init = c_meta_k.index.values[c_meta_k.key == 1]                  
+
+                zero_cluster, c_centroid, d_centroid, c_sd, d_sd, c_name_cluster_k, d_name_sensitive_k, losses_train_hist, \
                     best_epos, c_meta_k, d_sens_k = train_CDPmodel_local_1round(self.CDPmodel_list[k], device, False, c_data, c_meta_k, d_data, \
-                                                                                cdr, c_names_k_init, d_names_k_init, self.sens_cutoff, k, train_params)
+                                                                                cdr, c_names_k_init, d_names_k_init, sensitive_cut_off, k, train_params)
                 
                 if zero_cluster:
                     # store/update the centroids
@@ -513,9 +387,9 @@ class CDPmodel(nn.Module):
 
                     if return_latents:
                         c_latent = self.CDPmodel_list[k].c_VAE.encode(torch.from_numpy(c_data.values).float().to(device), repram=False)
-                        c_latent_k.append(c_latent.detach().numpy())
+                        c_latent_k.append(c_latent.detach().cpu().numpy())
                         d_latent = self.CDPmodel_list[k].d_VAE.encode(torch.from_numpy(d_data.values).float().to(device), repram=False)
-                        d_latnet_k.append(d_latent.detach().numpy())
+                        d_latnet_k.append(d_latent.detach().cpu().numpy())
                 
                 ## Use multiprocessing to run the loop in parallel for each k
                 # with multiprocessing.Pool() as pool:
@@ -537,7 +411,7 @@ class CDPmodel(nn.Module):
                     d_latent_list.append(None)
             
 
-            if search_subcluster:
+            if search_subcluster and not zero_cluster:
                 # ---------------------------------------------
                 # 2. Run the dual loop again to find subclusters
                 print(f"  ===================================")
@@ -558,7 +432,7 @@ class CDPmodel(nn.Module):
                     print(f"     -- round {b} -------------")     
 
                     if b == 0:
-                        d_sens_hist_1[f'sensitive_k{k}'] = (cdr_1.loc[c_meta_k.index.values[c_meta_k.key == 1]].mean(axis=0) > 0.5).astype(int)
+                        d_sens_hist_1[f'sensitive_k{k}'] = (cdr_1.loc[c_meta_k.index.values[c_meta_k.key == 1]].mean(axis=0) > self.sens_cutoff).astype(int)
                         d_names_k_init_1 = d_sens_hist_1.index.values[d_sens_hist_1[f'sensitive_k{k}']==1]
 
                         c_names_k_init_1 = c_name_k_1
@@ -575,10 +449,9 @@ class CDPmodel(nn.Module):
                         # else:
                         #     sensitive_cut_off = self.sens_cutoff
 
-                    zero_cluster_sub, self.CDPmodel_list_sub[k], c_centroid_1, d_centroid_1, c_sd_1, d_sd_1, c_name_cluster_k_1, d_name_sensitive_k_1, losses_train_hist_1, \
-                        best_epos_1, c_meta_k_1, d_sens_k_1 = train_CDPmodel_local_1round(self.CDPmodel_list_sub[k], device, True, c_data, c_meta_k, d_data_1, \
+                    train_results = train_CDPmodel_local_1round(self.CDPmodel_list_sub[k], device, True, c_data, c_meta_k, d_data_1, \
                                                                                     cdr_1, c_names_k_init_1, d_names_k_init_1, sensitive_cut_off, k, train_params)
-
+                    zero_cluster_sub, c_centroid_1, d_centroid_1, c_sd_1, d_sd_1, c_name_cluster_k_1, d_name_sensitive_k_1, losses_train_hist_1, best_epos_1, c_meta_k_1, d_sens_k_1 = train_results
                     # print(c_meta_k_1)
 
                     if(zero_cluster_sub):
@@ -612,9 +485,9 @@ class CDPmodel(nn.Module):
 
                         if return_latents:
                             c_latent_1 = self.CDPmodel_list_sub[k].c_VAE.encode(torch.from_numpy(c_data.values).float().to(device), repram=False)
-                            c_latent_k_1.append(c_latent_1.detach().numpy())
+                            c_latent_k_1.append(c_latent_1.detach().cpu().numpy())
                             d_latent_1 = self.CDPmodel_list_sub[k].d_VAE.encode(torch.from_numpy(d_data.values).float().to(device), repram=False)
-                            d_latnet_k_1.append(d_latent_1.detach().numpy())
+                            d_latnet_k_1.append(d_latent_1.detach().cpu().numpy())
                 
                 if k in self.which_non_empty_subcluster:
                     print(f"Subcluster found as cluster {self.original_K + self.which_non_empty_subcluster.index(k)}")
@@ -715,10 +588,37 @@ class CDPmodel_sub(nn.Module):
         self.d_VAE.apply(weights_init_uniform_rule)
         self.predictor.apply(weights_init_uniform_rule)
 
-    def forward(self, c_X: Tensor, d_X: Tensor):
-        _, c_mu, c_log_var, c_Z, c_X_rec = self.c_VAE(c_X)
-        _, d_mu, d_log_var, d_Z, d_X_rec = self.d_VAE(d_X)
+    def forward(self, c_X=None, c_latent=None, d_X=None, d_latent=None, device='cpu'):    
+        if c_X is None and c_latent is None:
+            raise ValueError("At least one of c_X and c_latent must not be None.")
+        if d_X is None and d_latent is None:
+            raise ValueError("At least one of d_X and d_latent must not be None.")
+
+        if c_latent is None:
+            c_X = c_X.to(device)
+            self.c_VAE = self.c_VAE.to(device)
+            _, c_mu, c_log_var, c_Z, c_X_rec = self.c_VAE(c_X)
+            c_mu = c_mu.to(device)
+        else:
+            c_mu = c_latent.to(device)
+            c_log_var = None
+            c_X_rec = None
+
+
+        if d_latent is None: 
+            d_X = d_X.to(device)
+            self.d_VAE = self.d_VAE.to(device)
+            _, d_mu, d_log_var, d_Z, d_X_rec = self.d_VAE(d_X)
+            d_mu = d_mu.to(device)
+        else:
+            d_mu = d_latent.to(device)
+            d_log_var = None
+            d_X_rec = None
+
+        self.predictor = self.predictor.to(device)
+
         CDR = self.predictor(c_mu, d_mu)
+        
         return c_mu, c_log_var, c_X_rec, d_mu, d_log_var, d_X_rec, CDR
 
 

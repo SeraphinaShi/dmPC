@@ -3,6 +3,10 @@ import numpy as np
 from scipy.stats import pearsonr
 import math
 
+from torch.utils.data import DataLoader, TensorDataset
+from sklearn.model_selection import train_test_split
+import torch
+
 #-------------------------------------------------------------------------------------------------------------------------------------------
 # CDR relevent functions
 def binarize_CDR(CDR, method="cutoff", cutoff=3.5):
@@ -55,6 +59,100 @@ def max_dist_MinMaxLine(points):
     x2, y2 = len(points), points[-1]
     dists = [np.abs((y2-y1)*x + (x1-x2)*y + (x2*y1 - x1*y2)) / np.sqrt((y2-y1)**2 + (x1-x2)**2) for x, y in enumerate(points)]
     return points[np.argmax(dists)]
+
+def prepare_dataloaders(model, c_data, c_meta_k, d_data, d_sens_k, cdr_all, valid_size, batch_size, within_C_cluster=True, within_D_cluster=False, device=None):
+    
+    if within_C_cluster:
+        ### cluster K cell line latent space 
+        c_data_k = c_data[c_meta_k.key == 1]
+        c_data_k_tensor = torch.FloatTensor(c_data_k.values).to(device)
+        _, c_latent_k, _, _, _ = model.c_VAE(c_data_k_tensor)
+        c_latent_k_np = c_latent_k.detach().to(device).numpy()
+        c_latent_k_df = pd.DataFrame(c_latent_k_np, index=c_data_k.index)
+        c_data_k = c_latent_k_df
+
+        ### all drugs 
+        d_data_k = d_data
+        
+        ### corresponding cdr
+        cdr_k = cdr_all.loc[cdr_all.c_name.isin(c_data_k.index.values)]
+        
+    
+    if within_D_cluster:
+        ### all cell line data 
+        c_data_k = c_data
+
+        ### cluster K sensitive drug latent space 
+        d_sens_index = d_sens_k[d_sens_k.sensitive == 1].index
+        d_data_k = d_data.loc[d_sens_index]
+
+        d_data_k_tensor = torch.FloatTensor(d_data_k.values).to(device)
+        _, d_latent_k, _, _, _ = model.d_VAE(d_data_k_tensor)
+        d_latent_k_np = d_latent_k.detach().to(device).numpy()
+        d_latent_k_df = pd.DataFrame(d_latent_k_np, index=d_data_k.index)
+        d_data_k = d_latent_k_df
+        
+        ### corresponding cdr
+        cdr_k = cdr_all.loc[cdr_all.d_name.isin(d_data_k.index.values)]
+        
+
+    ##---------------------
+    ## train, test split
+    Y_train, Y_valid = train_test_split(cdr_k, test_size=valid_size)
+    
+    last_batch_size = Y_train.shape[0] % batch_size
+    if last_batch_size < 3:
+        sampled_rows = Y_train.sample(n=last_batch_size)
+        Y_train = Y_train.drop(sampled_rows.index)
+        Y_valid = pd.concat([Y_valid, sampled_rows], ignore_index=True)
+
+    c_data_train = c_data_k.loc[Y_train.c_name.astype(str)]
+    c_name_train = Y_train.c_name_encoded
+
+    c_data_valid = c_data_k.loc[Y_valid.c_name.astype(str)]
+    c_name_valid = Y_valid.c_name_encoded
+
+    d_data_train = d_data_k.loc[Y_train.d_name.astype(str)]
+    d_name_train = Y_train.d_name_encoded
+
+    d_data_valid = d_data_k.loc[Y_valid.d_name.astype(str)]
+    d_name_valid = Y_valid.d_name_encoded
+
+    ##---------------------
+    ## Construct datasets and data loaders
+    Y_trainTensor = torch.FloatTensor(Y_train.drop(['c_name','d_name', 'c_name_encoded', 'd_name_encoded'], axis=1).values).to(device)
+    c_data_trainTensor = torch.FloatTensor(c_data_train.values).to(device)
+    d_data_trainTensor = torch.FloatTensor(d_data_train.values).to(device)
+    c_name_trainTensor = torch.FloatTensor(c_name_train.values).to(device)
+    d_name_trainTensor = torch.FloatTensor(d_name_train.values).to(device)
+
+    Y_validTensor = torch.FloatTensor(Y_valid.drop(['c_name','d_name', 'c_name_encoded', 'd_name_encoded'], axis=1).values).to(device)
+    c_data_validTensor = torch.FloatTensor(c_data_valid.values).to(device)
+    d_data_validTensor = torch.FloatTensor(d_data_valid.values).to(device)
+    c_name_validTensor = torch.FloatTensor(c_name_valid.values).to(device)
+    d_name_validTensor = torch.FloatTensor(d_name_valid.values).to(device)
+
+    train_dataset = TensorDataset(Y_trainTensor, c_data_trainTensor, d_data_trainTensor, c_name_trainTensor, d_name_trainTensor)
+    valid_dataset = TensorDataset(Y_validTensor, c_data_validTensor, d_data_validTensor, c_name_validTensor, d_name_validTensor)
+
+    # X_trainDataLoader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    # X_validDataLoader = DataLoader(dataset=valid_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    
+    X_trainDataLoader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
+    X_validDataLoader = DataLoader(dataset=valid_dataset, batch_size=batch_size, shuffle=True)
+    # Prepare Dataloader for distributed training
+    # Shard the datasets among workers and move batches to the correct device
+    # X_trainDataLoader = ray.train.torch.prepare_data_loader(X_trainDataLoader)
+    # X_validDataLoader = ray.train.torch.prepare_data_loader(X_validDataLoader)
+
+    dataloader_p = {'train':X_trainDataLoader,'val':X_validDataLoader}
+
+    # for batchidx_, (y_, c_data_, d_data_, _, d_na_me) in enumerate(dataloaders_DP['train']):
+    #     print(f'   c_data_train shape: {c_data_train.shape}')
+    #     print(f'   batchidx: {batchidx_}')
+    #     print(f'   c_data shape: {c_data_.shape}')
+    #     print(f'   y shape: {y_.shape}')
+    return dataloader_p, cdr_k
 
 
 #-------------------------------------------------------------------------------------------------------------------------------------------
@@ -139,7 +237,7 @@ def find_outliers_3sd(latent):
 
     # Find outliers by comparing each tensor to the threshold
     outliers_bool = (latent - mean_tensor).abs() > threshold
-    index_of_outlier = outliers_bool.any(dim=1).nonzero().view(-1).numpy()
+    index_of_outlier = outliers_bool.any(dim=1).nonzero().view(-1).cpu().numpy()
 
     return index_of_outlier
 

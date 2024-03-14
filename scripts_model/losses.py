@@ -64,7 +64,7 @@ def c_cluster_mu_distance(mu, cluster_key):
     return d_loss
 
 
-def cluster_mu_distance(mu, sensitive):
+def cluster_mu_distance(mu, sensitive, device = 'cpu'):
     """
     recon_x: regenerated X
     x: origin X
@@ -74,24 +74,24 @@ def cluster_mu_distance(mu, sensitive):
     """
     # Cluster distance loss
     # sensitive cluster centroid
-    sensitive = sensitive.view(-1)
-    cluster_mu = mu[sensitive==1]
-    other_mu = mu[sensitive==0]
+    sensitive = sensitive.view(-1).to(device)
+    cluster_mu = mu[sensitive==1].to(device)
+    other_mu = mu[sensitive==0].to(device)
     
     if(sum(sensitive) == 0):
-        centroid = torch.zeros(1, mu.shape[1])
+        centroid = torch.zeros(1, mu.shape[1]).to(device)
     else:
-        centroid = cluster_mu.mean(dim=0)
+        centroid = cluster_mu.mean(dim=0).to(device)
 
     # within cluster distance
-    cluster_distances = torch.cdist(cluster_mu, centroid.view(1, -1))
-    cluster_distances = torch.abs(cluster_distances)
-    within_cluster_distance = cluster_distances.mean()
+    cluster_distances = torch.cdist(cluster_mu, centroid.view(1, -1)).to(device)
+    cluster_distances = torch.abs(cluster_distances).to(device)
+    within_cluster_distance = cluster_distances.mean().to(device)
 
     # outsiders' distances to this centroid
-    out_cluster_d = torch.cdist(other_mu, centroid.view(1, -1))
-    out_cluster_d = torch.abs(out_cluster_d)
-    out_cluster_distance = out_cluster_d.mean()
+    out_cluster_d = torch.cdist(other_mu, centroid.view(1, -1)).to(device)
+    out_cluster_d = torch.abs(out_cluster_d).to(device)
+    out_cluster_distance = out_cluster_d.mean().to(device)
 
     d_loss = within_cluster_distance - out_cluster_distance
     if torch.isnan(d_loss).any().item():

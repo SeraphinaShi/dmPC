@@ -8,6 +8,13 @@ from torch.utils.data import DataLoader, TensorDataset
 import torch.distributions
 import torch.utils
 
+# import ray.train.torch
+# from ray.train.torch import TorchTrainer
+# from ray.train import ScalingConfig
+
+import torch.multiprocessing
+torch.multiprocessing.set_start_method('spawn', force=True)
+
 import logging
 import os
 import sys
@@ -35,6 +42,7 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
     valid_size = params['valid_size']
     n_epochs = params['n_epochs']
     batch_size = params['batch_size']
+    num_workers = params['num_workers']
     lr =  params['lr']
     C_VAE_loss_weight = params['C_VAE_loss_weight']
     C_recon_loss_weight = params['C_recon_loss_weight']
@@ -53,6 +61,10 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
     else:
         c_p_save_path = f"{params['c_p_save_path']}{'_sub_'}{k}{'.pkl'}"
         d_p_save_path = f"{params['d_p_save_path']}{'_sub_'}{k}{'.pkl'}"
+
+    # Prepare and wrap your model with DistributedDataParallel
+    # Move the model the correct GPU/CPU device
+    # model = ray.train.torch.prepare_model(model)
 
     # -- clean data -- 
     cdr = cdr_org.copy()
@@ -73,74 +85,13 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
     d_names_encoded_k_init = [d_name_encode_map[string] for string in d_names_k_init]
 
 
-    # d_sens_k_init = pd.DataFrame({'sensitive': (cdr_org.loc[c_meta_k.index.values[c_meta_k.key == 1]].mean(axis=0) > sens_cutoff).astype(int)})
-    # d_names_k_init = d_sens_k_init.index.values[d_sens_k_init['sensitive']==1]
-    # c_names_k_init = c_meta_k.index.values[c_meta_k.key == 1]
-    # print(d_names_k_init)
-    # print(c_names_k_init)
-
     #a=================================================================================
     # Train D_VAE and predictor
+    print(f"       a. Training D_VAE and Predictor")
+
     ##---------------------
     ## prepare data
-    ### cluster K cell line latent space 
-    c_data_k = c_data[c_meta_k.key == 1]
-
-    ### all drugs 
-    d_data = d_data
-
-    ### corresponding cdr
-    cdr_k = cdr_all.loc[cdr_all.c_name.isin(c_data_k.index.values)]
-
-    ##---------------------
-    ## train, test split
-    Y_train, Y_valid = train_test_split(cdr_k, test_size=valid_size)
-    
-    last_batch_size = Y_train.shape[0] % batch_size
-    if last_batch_size < 3:
-        sampled_rows = Y_train.sample(n=last_batch_size)
-        Y_train = Y_train.drop(sampled_rows.index)
-        Y_valid = pd.concat([Y_valid, sampled_rows], ignore_index=True)
-
-    c_data_train = c_data_k.loc[Y_train.c_name.astype(str)]
-    c_name_train = Y_train.c_name_encoded
-
-    c_data_valid = c_data_k.loc[Y_valid.c_name.astype(str)]
-    c_name_valid = Y_valid.c_name_encoded
-
-    d_data_train = d_data.loc[Y_train.d_name.astype(str)]
-    d_name_train = Y_train.d_name_encoded
-
-    d_data_valid = d_data.loc[Y_valid.d_name.astype(str)]
-    d_name_valid = Y_valid.d_name_encoded
-
-    ##---------------------
-    ## Construct datasets and data loaders
-    Y_trainTensor = torch.FloatTensor(Y_train.drop(['c_name','d_name', 'c_name_encoded', 'd_name_encoded'], axis=1).values).to(device)
-    c_data_trainTensor = torch.FloatTensor(c_data_train.values).to(device)
-    d_data_trainTensor = torch.FloatTensor(d_data_train.values).to(device)
-    c_name_trainTensor = torch.FloatTensor(c_name_train.values).to(device)
-    d_name_trainTensor = torch.FloatTensor(d_name_train.values).to(device)
-
-    Y_validTensor = torch.FloatTensor(Y_valid.drop(['c_name','d_name', 'c_name_encoded', 'd_name_encoded'], axis=1).values).to(device)
-    c_data_validTensor = torch.FloatTensor(c_data_valid.values).to(device)
-    d_data_validTensor = torch.FloatTensor(d_data_valid.values).to(device)
-    c_name_validTensor = torch.FloatTensor(c_name_valid.values).to(device)
-    d_name_validTensor = torch.FloatTensor(d_name_valid.values).to(device)
-
-    train_dataset = TensorDataset(Y_trainTensor, c_data_trainTensor, d_data_trainTensor, c_name_trainTensor, d_name_trainTensor)
-    valid_dataset = TensorDataset(Y_validTensor, c_data_validTensor, d_data_validTensor, c_name_validTensor, d_name_validTensor)
-
-    X_trainDataLoader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
-    X_validDataLoader = DataLoader(dataset=valid_dataset, batch_size=batch_size, shuffle=True)
-
-    dataloaders_DP = {'train':X_trainDataLoader,'val':X_validDataLoader}
-
-    # for batchidx_, (y_, c_data_, d_data_, _, d_na_me) in enumerate(dataloaders_DP['train']):
-    #     print(f'   c_data_train shape: {c_data_train.shape}')
-    #     print(f'   batchidx: {batchidx_}')
-    #     print(f'   c_data shape: {c_data_.shape}')
-    #     print(f'   y shape: {y_.shape}')
+    dataloaders_DP, cdr_k = prepare_dataloaders(model, c_data, c_meta_k, d_data, None, cdr_all, valid_size, batch_size, within_C_cluster=True, within_D_cluster=False, device=device)
 
     ##---------------------
     ## define optimizer
@@ -149,10 +100,11 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
 
     ##---------------------
     ## update D_VAE and predictor
-    print(f"       a. Training D_VAE and Predictor")
+
     start = time.time()
-    model, loss_train_hist, best_epo_a = train_CDPmodel_local(
-        model=model,
+
+    loss_train_hist, best_epo_a = train_CDPmodel_local(
+        model=model, device = device,
         data_loaders=dataloaders_DP,
         c_names_k_old = c_names_encoded_k_init, 
         d_names_k_old = d_names_encoded_k_init,
@@ -171,6 +123,8 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
         optimizer=optimizer_e,
         n_epochs=n_epochs,
         scheduler=exp_lr_scheduler_e,
+        within_C_cluster = True,
+        within_D_cluster = False,
         save_path = d_p_save_path)
     end = time.time()
     print(f"            Running time: {end - start}")
@@ -185,7 +139,7 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
     d_latentTensor = model.d_VAE.encode(torch.from_numpy(d_data.loc[cdr_k.d_name].values).float().to(device), repram=False)
     y_hatTensor = model.predictor(c_latentTensor, d_latentTensor)
 
-    y_hat = y_hatTensor.detach().view(-1)
+    y_hat = y_hatTensor.detach().view(-1).cpu()
     y_hat = y_hat.numpy()
     cdr_k_hat = pd.DataFrame({'d_name':cdr_k.d_name, 'c_name':cdr_k.c_name, 'cdr':y_hat})
 
@@ -206,89 +160,33 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
             d_sens_k.at[index, 'sensitive'] = 0
 
     print(f"       b. {sum(d_sens_k.sensitive)} sensitive drug(s)")
-    
+     
     if sum(d_sens_k.sensitive) <= 1:
-        return True, None, None, None, None, None, None, None, None, None, None, None
+        return True, None, None, None, None, None, None, None, None, None, None
 
     #c=================================================================================
     # Train C_VAE and predictor 
 
     ##---------------------
     ## prepare data
-    ### all cell line data 
-    c_data = c_data
-
-    ### cluster K sensitive drug latent space 
-    d_sens_index = d_sens_k[d_sens_k.sensitive == 1].index
-    d_data_k = d_data.loc[d_sens_index]
-
-    ### corresponding cdr
-    cdr_k = cdr_all.loc[cdr_all.d_name.isin(d_data_k.index.values)]
-
-
-    ##---------------------
-    ## train, test split
-    Y_train, Y_valid = train_test_split(cdr_k, test_size=valid_size)
-
-    last_batch_size = Y_train.shape[0] % batch_size
-    if last_batch_size < 3:
-        sampled_rows = Y_train.sample(n=last_batch_size)
-        Y_train = Y_train.drop(sampled_rows.index)
-        Y_valid = pd.concat([Y_valid, sampled_rows], ignore_index=True)
-
-    c_data_train = c_data.loc[Y_train.c_name.astype(str)]
-    c_name_train = Y_train.c_name_encoded
-
-    c_data_valid = c_data.loc[Y_valid.c_name.astype(str)]
-    c_name_valid = Y_valid.c_name_encoded
-
-    d_data_train = d_data_k.loc[Y_train.d_name.astype(str)]
-    d_name_train = Y_train.d_name_encoded
-
-    d_data_valid = d_data_k.loc[Y_valid.d_name.astype(str)]
-    d_name_valid = Y_valid.d_name_encoded
-
-
-    ##---------------------
-    ## Construct datasets and data loaders
-    Y_trainTensor = torch.FloatTensor(Y_train.drop(['c_name','d_name', 'c_name_encoded', 'd_name_encoded'], axis=1).values).to(device)
-    c_data_trainTensor = torch.FloatTensor(c_data_train.values).to(device)
-    d_data_trainTensor = torch.FloatTensor(d_data_train.values).to(device)
-    c_name_trainTensor = torch.FloatTensor(c_name_train.values).to(device)
-    d_name_trainTensor = torch.FloatTensor(d_name_train.values).to(device)
-
-    Y_validTensor = torch.FloatTensor(Y_valid.drop(['c_name','d_name', 'c_name_encoded', 'd_name_encoded'], axis=1).values).to(device)
-    c_data_validTensor = torch.FloatTensor(c_data_valid.values).to(device)
-    d_data_validTensor = torch.FloatTensor(d_data_valid.values).to(device)
-    c_name_validTensor = torch.FloatTensor(c_name_valid.values).to(device)
-    d_name_validTensor = torch.FloatTensor(d_name_valid.values).to(device)
-
-    train_dataset = TensorDataset(Y_trainTensor, c_data_trainTensor, d_data_trainTensor, c_name_trainTensor, d_name_trainTensor)
-    valid_dataset = TensorDataset(Y_validTensor, c_data_validTensor, d_data_validTensor, c_name_validTensor, d_name_validTensor)
-
-    X_trainDataLoader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
-    X_validDataLoader = DataLoader(dataset=valid_dataset, batch_size=batch_size, shuffle=True)
-
-    dataloaders_CP = {'train':X_trainDataLoader,'val':X_validDataLoader}
-
-    
-    # for batchidx_, (y_, c_data_, d_data_, _, d_na_me) in enumerate(dataloaders_CP['train']):
-    #     print(f'   c_data_train shape: {c_data_train.shape}')
-    #     print(f'   batchidx: {batchidx_}')
-    #     print(f'   c_data shape: {c_data_.shape}')
-    #     print(f'   y shape: {y_.shape}')
+    dataloaders_CP, cdr_k = prepare_dataloaders(model, c_data, None, d_data, d_sens_k, cdr_all, valid_size, batch_size, within_C_cluster=False, within_D_cluster=True, device=device)
 
     ##---------------------
     ## define optimizer
     optimizer_e = optim.Adam(model.parameters(), lr=lr)
     exp_lr_scheduler_e = lr_scheduler.ReduceLROnPlateau(optimizer_e)
 
+    if torch.cuda.device_count() > 1:
+        model = torch.nn.DataParallel(model)
+    model.to(device)
+
     ##---------------------
     ## update C_VAE and predictor
     print(f"       c. Training C_VAE and Predictor")
     start = time.time()
-    model, loss_train_hist, best_epo_c = train_CDPmodel_local(
-        model=model,
+
+    loss_train_hist, best_epo_c = train_CDPmodel_local(
+        model=model, device = device,
         data_loaders=dataloaders_CP,
         c_names_k_old = c_names_encoded_k_init, 
         d_names_k_old = d_names_encoded_k_init,
@@ -306,6 +204,8 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
         optimizer=optimizer_e,
         n_epochs=n_epochs,
         scheduler=exp_lr_scheduler_e,
+        within_C_cluster = False,
+        within_D_cluster = True,
         save_path = c_p_save_path)
     end = time.time()
     print(f"            Running time: {end - start}")
@@ -323,7 +223,7 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
     # _,_,_,_,_,_,y_hatTensor = model(torch.from_numpy(c_data.loc[cdr_k.c_name].values).float().to(device),
     #                                 torch.from_numpy(d_data.loc[cdr_k.d_name].values).float().to(device))
 
-    y_hat = y_hatTensor.detach().view(-1)
+    y_hat = y_hatTensor.detach().view(-1).cpu()
     y_hat = y_hat.numpy()
     cdr_k_hat = pd.DataFrame({'d_name':cdr_k.d_name, 'c_name':cdr_k.c_name, 'cdr':y_hat})
 
@@ -342,13 +242,15 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
         for index in c_outlier_idx:
             c_sens_k.at[index, 'sensitive'] = 0
 
-    idx_cluster_updated = c_sens_k.sensitive == 1
-    idx_cluster = c_meta_k.key == 1
+    old_1_boo = c_meta_k['key'] == 1
+    c_meta_k.loc[old_1_boo, 'key'] = 0
+    
+    sens_boo = c_sens_k['sensitive'] == 1
+    c_meta_k.loc[sens_boo, 'key'] = 1
+    # c_meta_k.loc[c_meta_k.index[idx_cluster_updated], 'key'] = 1
 
-    c_meta_k.loc[idx_cluster, 'key'] = 0
-    c_meta_k.loc[idx_cluster_updated, 'key'] = 1
-
-    print(f"       d. {sum(idx_cluster_updated)} cancer cell line(s) in the cluster")
+    sensitive_count = c_sens_k.sensitive.sum()
+    print(f"       d. {sensitive_count} cancer cell line(s) in the cluster")
 
     losses_train_hist = [a_losses, c_losses]
     best_epos = [best_epo_a, best_epo_c]
@@ -362,17 +264,18 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
     d_centroid = d_cluster_latent.mean(dim=0)
     d_sd = d_cluster_latent.std(dim=0)
 
-    return False, model, c_centroid, d_centroid, c_sd, d_sd, c_name_cluster_k, d_name_sensitive_k, losses_train_hist, best_epos, c_meta_k, d_sens_k
+    return False, c_centroid, d_centroid, c_sd, d_sd, c_name_cluster_k, d_name_sensitive_k, losses_train_hist, best_epos, c_meta_k, d_sens_k
 
 
 
-def train_CDPmodel_local(model, data_loaders={}, c_names_k_old=None, d_names_k_old=None, 
-                       C_VAE_loss_weight = 1, C_recon_loss_weight = 1, C_kld_weight = None, C_cluster_distance_weight=100, C_update_ratio_weight = 100, 
-                       D_VAE_loss_weight = 1, D_recon_loss_weight = 1, D_kld_weight = None, D_cluster_distance_weight=100, D_update_ratio_weight = 100, 
-                       predict_loss_weight = 1, 
-                       sens_cutoff = 0.5,
-                       optimizer=None, n_epochs=100, scheduler=None,
-                       load=False, save_path="model.pkl",  best_model_cache = "drive"):
+def train_CDPmodel_local(model, device, data_loaders={}, c_names_k_old=None, d_names_k_old=None, 
+                         C_VAE_loss_weight = 1, C_recon_loss_weight = 1, C_kld_weight = None, C_cluster_distance_weight=100, C_update_ratio_weight = 100, 
+                         D_VAE_loss_weight = 1, D_recon_loss_weight = 1, D_kld_weight = None, D_cluster_distance_weight=100, D_update_ratio_weight = 100, 
+                         predict_loss_weight = 1, 
+                         sens_cutoff = 0.5,
+                         optimizer=None, n_epochs=100, scheduler=None,
+                         within_C_cluster = False, within_D_cluster = False,
+                         load=False, save_path="model.pkl",  best_model_cache = "drive"):
     
     if(load!=False):
         if(os.path.exists(save_path)):
@@ -433,21 +336,18 @@ def train_CDPmodel_local(model, data_loaders={}, c_names_k_old=None, d_names_k_o
 
             n_iters = len(data_loaders[phase])
 
-
             # Iterate over data.
             # for data in data_loaders[phase]:
             for batchidx, (y, c_data, d_data, c_name, d_name) in enumerate(data_loaders[phase]):
-                
-                # if c_data.shape[0] <= 2:
-                #     print(f'epoch: {epoch}, phase: {phase}, batch: {batchidx}')
-                #     print(f'c_data shape: {c_data.shape}')
-                #     print(f'd_data shape: {d_data.shape}')
                 
                 y.requires_grad_(True)
                 d_data.requires_grad_(True)
 
                 # encode and decode 
-                c_mu, c_log_var, c_X_rec, d_mu, d_log_var, d_X_rec, y_hat = model(c_data, d_data)
+                if within_C_cluster:
+                    c_mu, c_log_var, c_X_rec, d_mu, d_log_var, d_X_rec, y_hat = model(c_latent = c_data, d_X = d_data, device = device)
+                if within_D_cluster: 
+                    c_mu, c_log_var, c_X_rec, d_mu, d_log_var, d_X_rec, y_hat = model(c_X = c_data, d_latent = d_data, device = device)
 
                 sensitive = y_hat > sens_cutoff
                 sensitive = sensitive.long()
@@ -458,7 +358,12 @@ def train_CDPmodel_local(model, data_loaders={}, c_names_k_old=None, d_names_k_o
 
                 #   1. Prediction loss: 
                 bce = nn.BCELoss()
-                prediction_loss = bce(y_hat, y)
+                try:
+                    prediction_loss = bce(y_hat, y)
+                except Exception as e:
+                    print(f"An error occurred: {e}")
+                    print(f"y_hat passed into the function: {y_hat}")
+                    print(f"y passed into the function: {y}")
                 
                 if C_VAE_loss_weight > 0:
                     # 2. C_VAE:
@@ -468,7 +373,7 @@ def train_CDPmodel_local(model, data_loaders={}, c_names_k_old=None, d_names_k_o
                     # 2.2. the loss of latent spaces distances:
                     #     - distances of cells in the cluster to the cluster centroid 
                     #     + distances of cells outside the cluster to the cluster centroid 
-                    C_latent_dist_loss = cluster_mu_distance(c_mu, sensitive)
+                    C_latent_dist_loss = cluster_mu_distance(c_mu, sensitive, device)
                     
                     # adding all up
                     if C_kld_weight is None:
@@ -478,7 +383,7 @@ def train_CDPmodel_local(model, data_loaders={}, c_names_k_old=None, d_names_k_o
 
 
                     # 3. requiring the updated cluster overlaping with the old clustering
-                    cdr_k_hat = pd.DataFrame({'d_name':d_name.detach().numpy(), 'c_name':c_name.detach().numpy(), 'cdr':y_hat.detach().numpy().flatten()})
+                    cdr_k_hat = pd.DataFrame({'d_name':d_name.detach().cpu().numpy(), 'c_name':c_name.detach().cpu().numpy(), 'cdr':y_hat.detach().cpu().numpy().flatten()})
 
                     if len(set(c_names_k_old)) > 0:
                         c_sens_k = get_C_sensitive_codes(cdr_k_hat, sens_cutoff)
@@ -503,7 +408,7 @@ def train_CDPmodel_local(model, data_loaders={}, c_names_k_old=None, d_names_k_o
                     # 4.2. the loss of latent spaces distances:
                     #     - distances of drugs in the cluster to the cluster centroid 
                     #     + distances of drugs outside the cluster to the cluster centroid 
-                    D_latent_dist_loss = cluster_mu_distance(d_mu, sensitive)
+                    D_latent_dist_loss = cluster_mu_distance(d_mu, sensitive, device)
                     
                     # adding all up
                     if D_kld_weight is None:
@@ -513,7 +418,7 @@ def train_CDPmodel_local(model, data_loaders={}, c_names_k_old=None, d_names_k_o
 
 
                     # 5 requiring the updated cluster overlaping with the old clustering
-                    cdr_k_hat = pd.DataFrame({'d_name':d_name.detach().numpy(), 'c_name':c_name.detach().numpy(), 'cdr':y_hat.detach().numpy().flatten()})
+                    cdr_k_hat = pd.DataFrame({'d_name':d_name.cpu().detach().numpy(), 'c_name':c_name.cpu().detach().numpy(), 'cdr':y_hat.cpu().detach().numpy().flatten()})
 
                     if len(set(d_names_k_old)) > 0:
                         d_sens_k = get_D_sensitive_codes(cdr_k_hat, sens_cutoff)
@@ -530,27 +435,14 @@ def train_CDPmodel_local(model, data_loaders={}, c_names_k_old=None, d_names_k_o
                 
                 # Add up three losses:
                 loss =  C_VAE_loss_weight * C_VAE_loss + D_VAE_loss_weight * D_VAE_loss + predict_loss_weight * prediction_loss + C_update_ratio_weight * C_overlap_loss + D_update_ratio_weight * D_overlap_loss
-                # if C_VAE_loss_weight > 0:
-                #     print(f'     C_VAE_loss: {C_VAE_loss}')
-                #     print(f"   c: {C_VAE_loss_weight * C_VAE_loss}")
-                #     print(f'     D_VAE_loss: {D_VAE_loss}')
-                #     print(f"   d: {D_VAE_loss_weight * D_VAE_loss}")
-                #     print(f'     prediction_loss: {prediction_loss}')
-                #     print(f"   p: {predict_loss_weight * prediction_loss}")
-                #     print(f'     C_overlap_loss: {C_overlap_loss}')
-                #     print(f"   c_o: {C_update_ratio_weight * C_overlap_loss}")
-                #     print(f'     D_overlap_loss: {D_overlap_loss}')
-                #     print(f"   d_o: {D_update_ratio_weight * D_overlap_loss}")
-                #     print(f'   Total loss: {loss}')
+
 
                 optimizer.zero_grad()
 
                 # backward + optimize only if in training phase
                 if phase == 'train':
                     loss.backward()
-                    # addressing the instability by lowering the learning rate or use gradient clipping
-                    # torch.nn.utils.clip_grad_norm_(d_vae_predictor.parameters(), 0.01)
-                    # update the weights
+
                     optimizer.step()
 
                 # print loss statistics
@@ -587,10 +479,6 @@ def train_CDPmodel_local(model, data_loaders={}, c_names_k_old=None, d_names_k_o
             epoch_d_kld_loss = running_d_kld_loss / dataset_sizes[phase]
             epoch_d_cluster_d = running_d_cluster_d / dataset_sizes[phase]
             
-            #if phase == 'train':
-            #    scheduler.step(epoch_loss)
-                
-            # last_lr = scheduler.optimizer.param_groups[0]['lr']
             loss_hist[epoch,phase] = epoch_loss
             c_vae_loss_hist[epoch,phase] = epoch_c_vae_loss
             c_recon_loss_hist[epoch,phase] = epoch_c_recon_loss
@@ -631,9 +519,13 @@ def train_CDPmodel_local(model, data_loaders={}, c_names_k_old=None, d_names_k_o
         model.load_state_dict((torch.load(save_path+"_bestcahce.pkl")))
         torch.save(model.state_dict(), save_path)
 
-    return model, train_hist, best_epoch
+    return train_hist, best_epoch
 
-def train_VAE_train(vae, data_loaders={}, recon_loss_weight=1, kld_weight = None, optimizer=None, n_epochs=100, scheduler=None, load=False, save_path="vae.pkl", best_model_cache = "drive"):
+
+
+
+
+def train_VAE_train(vae, device, data_loaders={}, recon_loss_weight=1, kld_weight = None, optimizer=None, n_epochs=100, scheduler=None, load=False, save_path="vae.pkl", best_model_cache = "drive"):
     
     if(load!=False):
         if(os.path.exists(save_path)):
@@ -650,6 +542,8 @@ def train_VAE_train(vae, data_loaders={}, recon_loss_weight=1, kld_weight = None
     
     best_loss = np.inf
     best_epoch = -1
+    
+    vae.to(device)
 
     for epoch in range(n_epochs):
         logging.info('Epoch {}/{}'.format(epoch, n_epochs - 1))
@@ -674,6 +568,8 @@ def train_VAE_train(vae, data_loaders={}, recon_loss_weight=1, kld_weight = None
             for batchidx, (x, _) in enumerate(data_loaders[phase]):
 
                 x.requires_grad_(True)
+                x = x.to(device)
+                
                 # encode and decode 
                 X, mu, log_var, Z, X_rec = vae(x)
                 
@@ -745,9 +641,10 @@ def train_VAE_train(vae, data_loaders={}, recon_loss_weight=1, kld_weight = None
 
 
 
-def train_VAE(VAE_model, device, data, vae_type, save_path, params):
+def train_VAE(VAE_model, device, data, vae_type, save_path, params, num_workers = 2):
     valid_size = params['valid_size']
-    n_epochs = params['n_epochs']
+    # n_epochs = params['n_epochs']
+    n_epochs = 150
     batch_size = params['batch_size']
     lr =  params['lr']
     if vae_type == "C":
@@ -757,6 +654,9 @@ def train_VAE(VAE_model, device, data, vae_type, save_path, params):
         recon_loss_weight = params['D_recon_loss_weight']
         kld_weight = params['D_kld_weight']
 
+    if torch.cuda.device_count() > 1:
+        VAE_model = torch.nn.DataParallel(VAE_model)
+    VAE_model.to(device)
 
     ##---------------------
     ## prepare data 
@@ -776,6 +676,8 @@ def train_VAE(VAE_model, device, data, vae_type, save_path, params):
 
     X_trainDataLoader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
     X_validDataLoader = DataLoader(dataset=valid_dataset, batch_size=batch_size, shuffle=True)
+    # X_trainDataLoader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    # X_validDataLoader = DataLoader(dataset=valid_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
     dataloaders = {'train':X_trainDataLoader,'val':X_validDataLoader}
     ##---------------------
@@ -788,6 +690,7 @@ def train_VAE(VAE_model, device, data, vae_type, save_path, params):
     start = time.time()
     VAE_model, train_hist, best_epo_cVAE = train_VAE_train(
         vae=VAE_model,
+        device = device,
         data_loaders=dataloaders,
         recon_loss_weight = recon_loss_weight,
         kld_weight = kld_weight,
