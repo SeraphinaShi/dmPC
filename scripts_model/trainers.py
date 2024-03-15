@@ -387,10 +387,18 @@ def train_CDPmodel_local(model, device, data_loaders={}, c_names_k_old=None, d_n
 
                     if len(set(c_names_k_old)) > 0:
                         c_sens_k = get_C_sensitive_codes(cdr_k_hat, sens_cutoff)
-                        c_names_sens_k = c_sens_k.index.values[c_sens_k.sensitive == 1]
-                        c_overlap_ratio = len(set(c_names_sens_k) & set(c_names_k_old)) / len(set(c_names_k_old))
+                        c_assignments = torch.tensor(c_sens_k['sensitive'].values == 1, dtype=torch.float32)
+                        
+                        prev_assignments = torch.zeros(c_assignments.shape, dtype=torch.float32)
+                        for i, name in enumerate(c_sens_k.index.values):
+                            if name in c_names_k_old:
+                                prev_assignments[i] = 1.0
 
-                        C_overlap_loss = - c_overlap_ratio # at least 50% overlapping, the more overlap the better?
+                        overlap = torch.dot(c_assignments, prev_assignments) / c_assignments.numel()
+
+                        # Define the loss as negative overlap to maximize it
+                        C_overlap_loss = -overlap
+                        
                     else:
                         C_overlap_loss = 0
                 
@@ -422,9 +430,18 @@ def train_CDPmodel_local(model, device, data_loaders={}, c_names_k_old=None, d_n
 
                     if len(set(d_names_k_old)) > 0:
                         d_sens_k = get_D_sensitive_codes(cdr_k_hat, sens_cutoff)
-                        d_names_sens_k = d_sens_k.index.values[d_sens_k.sensitive == 1]
-                        d_overlap_ratio = len(set(d_names_sens_k) & set(d_names_k_old)) / len(set(d_names_k_old))
-                        D_overlap_loss = - d_overlap_ratio # at least 50% overlapping, the more overlap the better?
+
+                        d_assignments = torch.tensor(d_sens_k['sensitive'].values == 1, dtype=torch.float32)
+                        
+                        d_prev_assignments = torch.zeros(d_assignments.shape, dtype=torch.float32)
+                        for i, name in enumerate(d_sens_k.index.values):
+                            if name in d_names_k_old:
+                                d_prev_assignments[i] = 1.0
+
+                        overlap = torch.dot(d_assignments, d_prev_assignments) / d_assignments.numel()
+
+                        # Define the loss as negative overlap to maximize it
+                        D_overlap_loss = -overlap
                     else:
                         D_overlap_loss = 0
                 

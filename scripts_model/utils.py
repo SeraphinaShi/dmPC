@@ -147,11 +147,6 @@ def prepare_dataloaders(model, c_data, c_meta_k, d_data, d_sens_k, cdr_all, vali
 
     dataloader_p = {'train':X_trainDataLoader,'val':X_validDataLoader}
 
-    # for batchidx_, (y_, c_data_, d_data_, _, d_na_me) in enumerate(dataloaders_DP['train']):
-    #     print(f'   c_data_train shape: {c_data_train.shape}')
-    #     print(f'   batchidx: {batchidx_}')
-    #     print(f'   c_data shape: {c_data_.shape}')
-    #     print(f'   y shape: {y_.shape}')
     return dataloader_p, cdr_k
 
 
