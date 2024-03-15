@@ -18,6 +18,7 @@ from copy import deepcopy
 import logging
 import os
 
+import random
 
 
 import multiprocessing
@@ -254,8 +255,16 @@ class CDPmodel(nn.Module):
         return CDR_df
 
 
-    def fit(self, c_data, c_meta, d_data, cdr, train_params, n_rounds=3, search_subcluster = True, device='cpu'):
+    def fit(self, c_data, c_meta, d_data, cdr, train_params, n_rounds=3, search_subcluster = True, device='cpu', seed = 42):
         
+        random.seed(seed)
+        np.random.seed(seed)
+        
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+
         c_meta_hist = c_meta.copy()
         d_sens_hist = pd.DataFrame() 
         losses_train_hist_list = []
