@@ -149,6 +149,33 @@ def prepare_dataloaders(model, c_data, c_meta_k, d_data, d_sens_k, cdr_all, vali
 
     return dataloader_p, cdr_k
 
+#-------------------------------------------------------------------------------------------------------------------------------------------
+
+class MyMap:
+    def __init__(self):
+        # Initialize an empty dictionary
+        self.map_dict = {}
+
+    def add_to_map(self, key, value):
+        # Since dictionary keys must be immutable and we're dealing with lists,
+        # we'll convert the list 'key' to a tuple to use it as a dictionary key.
+        key_tuple = tuple(key)
+        if key_tuple in self.map_dict:
+            # If the key exists, append the value to the existing list
+            self.map_dict[key_tuple].append(value)
+        else:
+            # If the key doesn't exist, create a new list with the value
+            self.map_dict[key_tuple] = [value]
+
+    def get_from_map(self, key):
+        # Retrieve value by converting the key to tuple, similar to how we added it.
+        return self.map_dict.get(tuple(key), [])
+
+    def get_all_keys(self):
+        all_keys = list(self.map_dict.keys())
+        all_keys_list = [t[0] for t in all_keys]
+        return all_keys_list
+
 
 #-------------------------------------------------------------------------------------------------------------------------------------------
 def one_hot_encode(string_list):

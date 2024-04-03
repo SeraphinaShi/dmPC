@@ -55,6 +55,10 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
     D_cluster_distance_weight = params['D_cluster_distance_weight']
     D_update_ratio_weight = params['D_update_ratio_weight']
     predict_loss_weight = params['predict_loss_weight']
+
+    use_weighted_bce = params['use_weighted_bce']
+    use_mixture_kld = params['use_mixture_kld']
+
     if ifsubmodel == False:
         c_p_save_path = f"{params['c_p_save_path']}{'_'}{k}{'.pkl'}"
         d_p_save_path = f"{params['d_p_save_path']}{'_'}{k}{'.pkl'}"
@@ -125,7 +129,9 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
         scheduler=exp_lr_scheduler_e,
         within_C_cluster = True,
         within_D_cluster = False,
-        save_path = d_p_save_path)
+        save_path = d_p_save_path,
+        use_weighted_bce = use_weighted_bce,
+        use_mixture_kld = use_mixture_kld)
     end = time.time()
     print(f"            Running time: {end - start}")
 
@@ -206,7 +212,9 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
         scheduler=exp_lr_scheduler_e,
         within_C_cluster = False,
         within_D_cluster = True,
-        save_path = c_p_save_path)
+        save_path = c_p_save_path,
+        use_weighted_bce = use_weighted_bce,
+        use_mixture_kld = use_mixture_kld)
     end = time.time()
     print(f"            Running time: {end - start}")
 
@@ -252,6 +260,9 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
     sensitive_count = c_sens_k.sensitive.sum()
     print(f"       d. {sensitive_count} cancer cell line(s) in the cluster")
 
+    if sensitive_count <= 1:
+        return True, None, None, None, None, None, None, None, None, None, None
+
     losses_train_hist = [a_losses, c_losses]
     best_epos = [best_epo_a, best_epo_c]
 
@@ -275,7 +286,8 @@ def train_CDPmodel_local(model, device, data_loaders={}, c_names_k_old=None, d_n
                          sens_cutoff = 0.5,
                          optimizer=None, n_epochs=100, scheduler=None,
                          within_C_cluster = False, within_D_cluster = False,
-                         load=False, save_path="model.pkl",  best_model_cache = "drive"):
+                         load=False, save_path="model.pkl",  best_model_cache = "drive",
+                         use_weighted_bce = True, use_mixture_kld = True):
     
     if(load!=False):
         if(os.path.exists(save_path)):
@@ -333,7 +345,6 @@ def train_CDPmodel_local(model, device, data_loaders={}, c_names_k_old=None, d_n
             running_d_kld_loss = 0.0
             running_d_cluster_d = 0.0
             
-
             n_iters = len(data_loaders[phase])
 
             # Iterate over data.
@@ -349,26 +360,41 @@ def train_CDPmodel_local(model, device, data_loaders={}, c_names_k_old=None, d_n
                 if within_D_cluster: 
                     c_mu, c_log_var, c_X_rec, d_mu, d_log_var, d_X_rec, y_hat = model(c_X = c_data, d_latent = d_data, device = device)
 
+                has_nan = torch.isnan(y_hat).any()
+                if has_nan:
+                    print(f"The tensor has NaN values in y_hat. [epoc {epoch}, phase {phase}, batchidx {batchidx}] ")
+                    y_hat = torch.nan_to_num(y_hat, nan=0.0)
+
                 sensitive = y_hat > sens_cutoff
                 sensitive = sensitive.long()
 
                 # compute loss
 
-                mse = nn.MSELoss(reduction="sum")
-
                 #   1. Prediction loss: 
                 bce = nn.BCELoss()
-                try:
-                    prediction_loss = bce(y_hat, y)
-                except Exception as e:
-                    print(f"An error occurred: {e}")
-                    print(f"y_hat passed into the function: {y_hat}")
-                    print(f"y passed into the function: {y}")
+                
+                prediction_loss = bce(y_hat, y)
+                
+                if use_weighted_bce: # the loss contribution of the less frequent class is amplified
+                    eps = 1e-4  # A small constant to regularize weights
+
+                    weight_zero = (torch.mean(y.float()) + eps) / (1 + eps)
+                    weight_one = 1 - weight_zero
+
+                    weights = torch.zeros_like(y) 
+                    sens = torch.where(y == 1)[0] 
+                    weights[sens] = weight_one
+                    weights[weights == 0] = weight_zero
+                    
+                    prediction_loss = torch.sum(prediction_loss * weights) / torch.sum(weights)
+
+                
+                mse = nn.MSELoss(reduction="sum")
                 
                 if C_VAE_loss_weight > 0:
                     # 2. C_VAE:
                     # 2.1. VAE loss: reconstruction loss & kld
-                    C_recon_loss, C_kld = custom_vae_loss(c_data, c_mu, c_log_var, c_X_rec, mse)
+                    C_recon_loss, C_kld = custom_vae_loss(c_data, c_mu, c_log_var, c_X_rec, mse, sensitive, use_mixture_kld)
 
                     # 2.2. the loss of latent spaces distances:
                     #     - distances of cells in the cluster to the cluster centroid 
@@ -411,7 +437,7 @@ def train_CDPmodel_local(model, device, data_loaders={}, c_names_k_old=None, d_n
                 if D_VAE_loss_weight > 0:
                     # 4. D_VAE
                     # 4.1. VAE loss: reconstruction loss & kld
-                    D_recon_loss, D_kld = custom_vae_loss(d_data, d_mu, d_log_var, d_X_rec, mse)
+                    D_recon_loss, D_kld = custom_vae_loss(d_data, d_mu, d_log_var, d_X_rec, mse, sensitive, use_mixture_kld)
 
                     # 4.2. the loss of latent spaces distances:
                     #     - distances of drugs in the cluster to the cluster centroid 
@@ -593,7 +619,7 @@ def train_VAE_train(vae, device, data_loaders={}, recon_loss_weight=1, kld_weigh
                 # compute loss
                 mse = nn.MSELoss(reduction="sum")
 
-                recon_loss, kld = custom_vae_loss(X, mu, log_var, X_rec, mse)
+                recon_loss, kld = custom_vae_loss(X, mu, log_var, X_rec, mse, None, use_mixture_kld = False)
 
                 if kld_weight is None:
                     kld_weight = data_loaders[phase].batch_size/dataset_sizes[phase]

@@ -14,7 +14,7 @@ def plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=1, k_
     color_labels = np.array(list(map(str, c_meta_hist['code'].unique())))
     for b in range(n_rounds):
         color_labels = np.union1d(color_labels, c_meta_hist[f'code_b{b}'].unique())   
-    color_values = sns.color_palette("Set2", 8)
+    color_values = sns.color_palette("Set2", 20)
     color_map = dict(zip(color_labels, color_values))
 
     if  k_sub != None:
@@ -114,11 +114,8 @@ def plot_c_PCA_latent(c_data, n_rounds, fit_returns, model, plots_save_path):
     _, c_meta_hist, _, _, _, _, _, c_latent_list, _ = fit_returns
     
     for k in model.which_non_empty_cluster:
-        if k in model.which_non_empty_subcluster:
-            k_sub = model.cluster_id_for_subcluster[model.which_non_empty_subcluster.index(k)]
-            plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=k, k_sub = k_sub, plot_save_path=f'{plots_save_path}_k{k}.png')
-        else:
-            plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=k, plot_save_path=f'{plots_save_path}_k{k}.png')
+        plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=k, plot_save_path=f'{plots_save_path}_k{k}.png')
+            
 
 
 def plot_c_PCA_latent_old(c_data, c_latent_list, c_meta_hist, n_rounds, legend_title='cluster', k=1, plot_save_path=''):
@@ -199,7 +196,12 @@ def plot_c_PCA_latent_test(model, device, n_rounds, c_latent_list, c_train, c_te
     else:
         c_meta_tmp = c_meta_tmp.loc[c_latent.index.values,]
 
-    color_labels = np.array(c_meta_tmp['c_cluster'].astype(str).unique())
+    all_labels = np.concatenate((c_meta_tmp['c_cluster'].astype(str), c_meta_tmp['cluster_init'].astype(str), np.array(['2'])))
+    color_labels = np.unique(all_labels)
+
+    # color_labels = np.array(c_meta_tmp['c_cluster'].astype(str).unique())
+    # color_labels = np.union1d(color_labels, c_meta_tmp['cluster_init'].unique())
+
     color_labels = np.unique(np.concatenate((color_labels, np.array(['2']))))
     color_values = sns.color_palette("Set2", 8)
     color_map = dict(zip(color_labels, color_values))
@@ -292,7 +294,6 @@ def plot_c_PCA_latent_test(model, device, n_rounds, c_latent_list, c_train, c_te
         plt.savefig(plot_save_path, dpi=300)
         
     plt.show()
-
 
 
 
@@ -404,11 +405,7 @@ def plot_d_PCA_latent(d_data, n_rounds, fit_returns, model, plots_save_path):
     _, _, d_sens_hist, _, _, _, _, _, d_latent_list = fit_returns
     
     for k in model.which_non_empty_cluster:
-        if k in model.which_non_empty_subcluster:
-            k_sub = model.cluster_id_for_subcluster[model.which_non_empty_subcluster.index(k)]
-            plot_d_PCA_latent_help(d_data, d_latent_list, d_sens_hist, n_rounds, k=k, k_sub = k_sub, plot_save_path=f'{plots_save_path}_k{k}.png')
-        else:
-            plot_d_PCA_latent_help(d_data, d_latent_list, d_sens_hist, n_rounds, k=k, plot_save_path=f'{plots_save_path}_k{k}.png')
+        plot_d_PCA_latent_help(d_data, d_latent_list, d_sens_hist, n_rounds, k=k, plot_save_path=f'{plots_save_path}_k{k}.png')
 
 
 def plot_d_PCA_latent_old(d_data, d_latent_list, d_sens_hist, n_rounds, legend_title='cluster', k=0, plot_save_path=''):
