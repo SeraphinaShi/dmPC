@@ -1,0 +1,321 @@
+---
+title: "GDSC Cell Line Data Preprocessing"
+author: "Seraphina Shi"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r load_libs,  message=FALSE, warning=FALSE} 
+library(here)
+library(data.table)
+library(readxl)
+library(dplyr)
+library(gtsummary)
+library(stringr)
+library(ggplot2)
+# library(impute)
+library(gplots)
+```
+
+```{r setup}
+plotFolder <- here("images", "simulations")
+if(!file.exists(plotFolder)) dir.create(plotFolder,recursive=TRUE)
+
+dataFolder <- here("data", "simulations")
+if(!file.exists(dataFolder)) dir.create(dataFolder,recursive=TRUE)
+
+knitr::opts_chunk$set(
+  cache=FALSE, autodep=FALSE, warning=FALSE, message=FALSE, echo=TRUE,
+  results = 'markup', dev='png', dpi=350, fig.align = "center", fig.path = paste0(plotFolder, "/"),
+  cache.path=".cache/",
+  duplicate.label="allow"
+)
+
+set.seed(234)
+```
+
+```{r}
+make_cdr_heatmap <- function(x, rowColor, colColor, Rowv=T, Colv=T, binary=T){
+  
+  if(binary){
+    col_cdr = c("#D9B4D5", "#6BBC47")
+    key_show = F
+  } else {
+    col_cdr = colorRampPalette(c("#D9B4D5",  "white",  "#6BBC47"))(n = 20)
+    key_show = T
+  }
+  
+  
+  heatmap_cdr <- heatmap.2(
+    x,
+    Rowv = Rowv,  # perform hierarchical clustering on rows
+    Colv = Colv,  # Perform hierarchical clustering on columns
+    col = col_cdr,  # Use the custom binary colors
+    dendrogram = "both",
+    trace = "none",
+    key = key_show,  # Disable the default color key
+    RowSideColors = rowColor,
+    ColSideColors = colColor,
+    labRow = FALSE,  # Hide row names
+    labCol = FALSE,  # Hide column names
+    main = "Cancer Drug Response",
+    lwid = c(0.2, 5),
+    lhei = c(1, 5)
+  )
+  
+  # Add legend after creating the heatmap
+  legend(y=1.15, x=0.0, xpd=TRUE, legend = c("0", "1"), fill = c("#D9B4D5", "#6BBC47"), bty = "n", cex = 0.8, title = "Sensitivity")
+  
+  mtext("Cance\n Types", side = 2, line = 0.5, at = 1, las = 2, cex = 0.8)
+  
+  return(heatmap_cdr)
+}
+```
+
+# load all data
+## input data
+### All cancer types
+```{r load_data}
+c_data <- read.csv(here(dataFolder, "simu2_RNAseq.csv"), row.names = 1)
+c_data <- t(c_data)
+
+c_meta <- read.csv(here(dataFolder, "simu2_RNAseq_meta_noise.csv"))
+
+d_data <- read.csv(here(dataFolder, "simu2_d_fp.csv"), row.names = 1)
+d_data <- t(d_data)
+
+cdr <- read.csv(here(dataFolder, "simu2.2_cdr_noise.csv"), row.names = 1)
+
+cat("Cancer RNAseq data dim: ", dim(c_data))
+cat("Drug PCA-based feature data dim: ", dim(d_data))
+cat("CDR data dim: ", dim(cdr))
+```
+
+
+## output data
+
+```{r}
+cdr_hat <- read.csv(here(dataFolder,  "GDSC_simu2.2_cdr_hat_train.csv"), row.names = 1)
+
+table(cdr_hat$c_cluster)
+table(cdr_hat$d_cluster)
+table(cdr_hat$cluster)
+
+
+```
+
+```{r}
+c_labels <- cdr_hat[, c("c_name", "c_cluster")] %>% unique()
+row.names(c_labels) <- c_labels$c_name
+d_labels <- cdr_hat[, c("d_name", "d_cluster")] %>% unique()
+row.names(d_labels) <- d_labels$d_name
+clusters <-  cdr_hat[,c('c_name', 'd_name', 'cluster')] %>% unique()
+
+cd_cluster_wide <- clusters %>%
+  tidyr::pivot_wider(names_from = d_name, values_from = cluster) %>%
+  as.data.frame() %>%
+  arrange(c_name) %>%
+  `rownames<-`(.$c_name) %>%
+  select(-c_name)
+
+heatmap.2(as.matrix(cd_cluster_wide))
+```
+
+```{r}
+cdr_hat_predicts <- cdr_hat[,c('c_name', 'd_name', 'cdr_hat')] %>% 
+  unique() %>% 
+  tidyr::pivot_wider(names_from = d_name, values_from = cdr_hat) %>%
+  as.data.frame() %>%
+  arrange(c_name) %>%
+  `rownames<-`(.$c_name) %>%
+  select(-c_name)
+
+
+
+cdr_hat_predicts <- cdr_hat_predicts[c(which(! grepl("c0_", rownames(cdr_hat_predicts))),
+                                       which(grepl("c0_", rownames(cdr_hat_predicts)))), ]
+
+
+
+c_labels_str <- c_labels[row.names(cdr_hat_predicts), ]$c_cluster
+rowCol <- ifelse(c_labels_str == "1", "#F4D98E",
+                        ifelse(c_labels_str == "1 & 2", "#F19ABC", "#94D8D8"))
+
+d_labels_str <- d_labels[names(cdr_hat_predicts), ]$d_cluster
+colCol <- ifelse(d_labels_str == 1, "#F4D98E",
+                        ifelse(d_labels_str == 2, "#F19ABC", "#94D8D8"))
+          
+heatmap.2(as.matrix(cdr_hat_predicts), 
+          Rowv = F, Colv=F, 
+          RowSideColors = rowCol,
+          ColSideColors = colCol,
+          trace='none',
+          col = colorRampPalette(c("#D9B4D5",  "white",  "#6BBC47"))(n = 20))
+
+legend(y=0.9, x=-0.1, xpd=TRUE,
+       legend = c("A","C","B"),
+       col = c("#F4D98E", "#F19ABC","#94D8D8"),
+       lty= 1, lwd = 5, cex=.7,
+       title = "Biclusters"
+       )
+```
+
+
+
+
+# latent
+```{r}
+c_latent_0 <- read.csv(here(dataFolder, "GDSC_simu2.2_cdr_c_latent_cluster0.csv"), row.names = 1)
+c_latent_1 <- read.csv(here(dataFolder, "GDSC_simu2.2_cdr_c_latent_cluster1.csv"), row.names = 1)
+c_latent_2 <- read.csv(here(dataFolder,"GDSC_simu2.2_cdr_c_latent_cluster2.csv"), row.names = 1)
+d_latent_0 <- read.csv(here(dataFolder,"GDSC_simu2.2_cdr_d_latent_cluster0.csv"), row.names = 1)
+d_latent_1 <- read.csv(here(dataFolder,"GDSC_simu2.2_cdr_d_latent_cluster1.csv"), row.names = 1)
+d_latent_2 <- read.csv(here(dataFolder,"GDSC_simu2.2_cdr_d_latent_cluster2.csv"), row.names = 1)
+
+
+```
+
+```{r , fig.width=10, fig.height=6}
+c_labels_str <- c_labels[row.names(cdr_hat_predicts), ]$c_cluster
+rowCol <- ifelse(c_labels_str == "1", "#F4D98E",
+                        ifelse(c_labels_str == "1 & 2", "#F19ABC", "#94D8D8"))
+
+heatmap.2(
+    as.matrix(c_latent_0[rownames(cdr_hat_predicts),]),
+    Rowv = F,  # perform hierarchical clustering on rows
+    Colv = T,  # Perform hierarchical clustering on columns
+    col =  colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299), 
+    RowSideColors = rowCol,
+    trace = "none",  # Do not show trace
+    key = T,  # Show color key
+    labRow = T,  # Hide row names
+    labCol = F,  # Hide column names
+)
+  
+
+
+c_labels_str <- c_labels[row.names(cdr_hat_predicts), ]$c_cluster
+rowCol <- ifelse(c_labels_str == "1", "#F4D98E",
+                        ifelse(c_labels_str == "1 & 2", "#F19ABC", "#94D8D8"))
+
+heatmap.2(
+    as.matrix(c_latent_1[rownames(cdr_hat_predicts),]),
+    Rowv = F,  # perform hierarchical clustering on rows
+    Colv = T,  # Perform hierarchical clustering on columns
+    col =  colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299), 
+    RowSideColors = rowCol,
+    trace = "none",  # Do not show trace
+    key = T,  # Show color key
+    labRow = T,  # Hide row names
+    labCol = F,  # Hide column names
+)
+
+c_labels_str <- c_labels[row.names(cdr_hat_predicts), ]$c_cluster
+rowCol <- ifelse(c_labels_str == "1", "#F4D98E",
+                        ifelse(c_labels_str == "1 & 2", "#F19ABC", "#94D8D8"))
+
+heatmap.2(
+    as.matrix(c_latent_2[rownames(cdr_hat_predicts),]),
+    Rowv = F,  # perform hierarchical clustering on rows
+    Colv = T,  # Perform hierarchical clustering on columns
+    col =  colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299), 
+    RowSideColors = rowCol,
+    trace = "none",  # Do not show trace
+    key = T,  # Show color key
+    labRow = T,  # Hide row names
+    labCol = F,  # Hide column names
+)
+  
+```
+```{r fig.width=3, fig.height=2}
+
+c_labels_str <- c_labels[row.names(cdr_hat_predicts), ]$c_cluster
+rowCol <- ifelse(c_labels_str == "1", "#F4D98E",
+                        ifelse(c_labels_str == "1 & 2", "#F19ABC", "#94D8D8"))
+
+c_latent_2 <- c_latent_2[rownames(cdr_hat_predicts), ]
+                         
+pc_results <- prcomp(c_latent_2, scale = TRUE)
+pc_results <- as.data.frame(pc_results$x)
+
+ggplot(data = pc_results, aes(PC1, PC2)) + 
+  geom_point(col = rowCol) +
+  theme_bw()
+
+```
+
+```{r fig.width=3, fig.height=2}
+
+d_labels_str <- d_labels[colnames(cdr_hat_predicts), ]$d_cluster
+rowCol <- ifelse(d_labels_str == 1, "#F4D98E",
+                        ifelse(d_labels_str == 2, "#F19ABC", "#94D8D8"))
+d_latent_2 <- d_latent_2[colnames(cdr_hat_predicts),]
+                         
+pc_results <- prcomp(d_latent_2, scale = TRUE)
+pc_results <- as.data.frame(pc_results$x)
+
+ggplot(data = pc_results, aes(PC1, PC2)) + 
+  geom_point(col = rowCol) +
+  theme_bw()
+
+```
+
+
+```{r , fig.width=10, fig.height=6}
+rowCol <- ifelse(d_labels_str == 1, "#F4D98E",
+                        ifelse(c_labels_str == 2, "#F19ABC", "#94D8D8"))
+
+
+d_labels_str <- d_labels[colnames(cdr_hat_predicts), ]$d_cluster
+rowCol <- ifelse(d_labels_str == 1, "#F4D98E",
+                        ifelse(d_labels_str == 2, "#F19ABC", "#94D8D8"))
+
+heatmap.2(
+    as.matrix(d_latent_0[colnames(cdr_hat_predicts),]),
+    Rowv = F,  # perform hierarchical clustering on rows
+    Colv = T,  # Perform hierarchical clustering on columns
+    col =  colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299), 
+    RowSideColors = rowCol,
+    trace = "none",  # Do not show trace
+    key = T,  # Show color key
+    labRow = T,  # Hide row names
+    labCol = F,  # Hide column names
+)
+
+d_labels_str <- d_labels[colnames(cdr_hat_predicts), ]$d_cluster
+rowCol <- ifelse(d_labels_str == 1, "#F4D98E",
+                        ifelse(d_labels_str == 2, "#F19ABC", "#94D8D8"))
+
+heatmap.2(
+    as.matrix(d_latent_1[colnames(cdr_hat_predicts),]),
+    Rowv = F,  # perform hierarchical clustering on rows
+    Colv = T,  # Perform hierarchical clustering on columns
+    col =  colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299), 
+    RowSideColors = rowCol,
+    trace = "none",  # Do not show trace
+    key = T,  # Show color key
+    labRow = T,  # Hide row names
+    labCol = F,  # Hide column names
+)
+  
+
+d_labels_str <- d_labels[colnames(cdr_hat_predicts), ]$d_cluster
+rowCol <- ifelse(d_labels_str == 1, "#F4D98E",
+                        ifelse(d_labels_str == 2, "#F19ABC", "#94D8D8"))
+
+heatmap.2(
+    as.matrix(d_latent_2[colnames(cdr_hat_predicts),]),
+    Rowv = F,  # perform hierarchical clustering on rows
+    Colv = T,  # Perform hierarchical clustering on columns
+    col =  colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299), 
+    RowSideColors = rowCol,
+    trace = "none",  # Do not show trace
+    key = T,  # Show color key
+    labRow = T,  # Hide row names
+    labCol = F,  # Hide column names
+)
+  
+```
+

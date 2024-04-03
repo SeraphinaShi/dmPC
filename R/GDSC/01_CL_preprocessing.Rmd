@@ -1,0 +1,88 @@
+---
+title: "GDSC Cell Line Data Preprocessing"
+author: "Seraphina Shi"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r load_libs,  message=FALSE, warning=FALSE} 
+library(here)
+library(data.table)
+library(readxl)
+library(dplyr)
+library(gtsummary)
+library(stringr)
+library(ggplot2)
+library(impute)
+```
+
+```{r setup}
+plotFolder <- here("images", "GDSC", "01_CCL_Preprocessing")
+if(!file.exists(plotFolder)) dir.create(plotFolder,recursive=TRUE)
+
+dataOutFolder <- here("data", "GDSC")
+if(!file.exists(dataOutFolder)) dir.create(dataOutFolder,recursive=TRUE)
+
+knitr::opts_chunk$set(
+  cache=FALSE, autodep=FALSE, warning=FALSE, message=FALSE, echo=TRUE,
+  results = 'markup', dev='png', dpi=150, fig.align = "center", fig.path=plotFolder,
+  cache.path=".cache/",
+  duplicate.label="allow"
+)
+
+set.seed(123)
+```
+
+
+```{r load_data}
+GDSC_raw_files <- here("data", "raw_data", "GDSC")
+```
+
+# Cancer
+## Annotation
+```{r}
+source(here("data_preprocessing", "GDSC", "01_CCL_preprocessing", "01_CL_annotation.R"))
+cat("Variables stored in the meta data")
+print(names(cl_meta))
+
+cat("Dimension the meta data of lung cancers: ")
+print(dim(cl_meta_lung))
+table(cl_meta_lung$cancer_type)
+```
+
+
+## RNA Seq
+```{r}
+source(here("data_preprocessing", "GDSC", "01_CCL_preprocessing", "01_CL_RNAseq.R"))
+```
+
+## RMA
+```{r}
+source(here("data_preprocessing", "GDSC", "01_CCL_preprocessing", "01_CL_RMA.R"))
+cat("Dimension the RMA data of lung cancers: ")
+print(dim(rma_var_genes_lung))
+```
+
+## Mutations
+```{r}
+source(here("data_preprocessing", "GDSC", "01_CCL_preprocessing", "01_CL_mutation.R"))
+cat("Dimension the mutation data of lung cancers: ")
+print(dim(CL_lung_variants))
+```
+
+
+## Counts of each data type
+```{r}
+cat("table(names(CL_lung_variants) %in% names(rma_var_genes_lung)): \n ")
+table(names(CL_lung_variants) %in% names(rma_var_genes_lung))
+```
+
+
+# Cancer drug response data
+```{r}
+source(here("scripts_GDSC", "01_CDR.R"))
+```
+
+```
