@@ -1,4 +1,5 @@
 from email import header
+from pickle import TRUE
 from tkinter import Y
 import torch
 from torch import nn, optim, Tensor
@@ -349,6 +350,11 @@ def train_CDPmodel_local(model, device, data_loaders={}, c_names_k_old=None, d_n
                 if within_D_cluster: 
                     c_mu, c_log_var, c_X_rec, d_mu, d_log_var, d_X_rec, y_hat = model(c_X = c_data, d_latent = d_data, device = device)
 
+                has_nan = torch.isnan(y_hat).any()
+                if has_nan:
+                    print(f"The tensor has NaN values in y_hat. [epoc {epoch}, phase {phase}, batchidx {batchidx}] ")
+                    y_hat = torch.nan_to_num(y_hat, nan=0.0)
+
                 sensitive = y_hat > sens_cutoff
                 sensitive = sensitive.long()
 
@@ -358,12 +364,27 @@ def train_CDPmodel_local(model, device, data_loaders={}, c_names_k_old=None, d_n
 
                 #   1. Prediction loss: 
                 bce = nn.BCELoss()
-                try:
-                    prediction_loss = bce(y_hat, y)
-                except Exception as e:
-                    print(f"An error occurred: {e}")
-                    print(f"y_hat passed into the function: {y_hat}")
-                    print(f"y passed into the function: {y}")
+                
+                prediction_loss = bce(y_hat, y)
+
+                use_weighted_bce = TRUE
+                
+                if use_weighted_bce: # the loss contribution of the less frequent class is amplified
+                    eps = 1e-4  # A small constant to regularize weights
+
+                    weight_zero = (torch.mean(y.float()) + eps) / (1 + eps)
+                    weight_one = 1 - weight_zero
+
+                    weights = torch.zeros_like(y) 
+                    sens = torch.where(y == 1)[0] 
+                    weights[sens] = weight_one
+                    weights[weights == 0] = weight_zero
+
+                    prediction_loss = torch.sum(prediction_loss * weights) / torch.sum(weights)
+
+
+
+
                 
                 if C_VAE_loss_weight > 0:
                     # 2. C_VAE:

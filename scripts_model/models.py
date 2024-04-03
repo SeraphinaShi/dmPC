@@ -38,17 +38,12 @@ class CDPmodel(nn.Module):
         CDPmodel_list = []
         for k in range(0,self.K):
             CDPmodel_list.append(CDPmodel_sub(params)) 
-        
-        CDPmodel_list_sub = []
-        for k in range(0,self.K):
-            CDPmodel_list_sub.append(CDPmodel_sub(params)) 
-        
+    
         self.CDPmodel_list = CDPmodel_list
-        self.CDPmodel_list_sub = CDPmodel_list_sub
+        self.CDPmodel_sub_tmp = CDPmodel_sub(params)
         
         self.which_non_empty_cluster = []
-        self.which_non_empty_subcluster = []
-        self.cluster_id_for_subcluster = []
+        self.subcluster_map_dict = MyMap()
 
         self.c_centroids = [None] * self.K
         self.c_sds = [None] * self.K
@@ -74,7 +69,7 @@ class CDPmodel(nn.Module):
 
             # find the cluster of C
             if c_name in self.c_in_trainnig:
-                for k_itr in (self.which_non_empty_cluster + self.cluster_id_for_subcluster):
+                for k_itr in self.which_non_empty_cluster:
                     if c_name in self.c_name_clusters_in_trainnig[k_itr]:
                         c_cluster.append(k_itr)
         
@@ -97,33 +92,11 @@ class CDPmodel(nn.Module):
                     c_cluster_tep = self.which_non_empty_cluster[torch.argmin(stacked_c_dists).item()]
                     c_cluster.append(c_cluster_tep)
 
-                # search through subclusters
-                if len(self.cluster_id_for_subcluster) > 0:
-                    c_sub_dists = []
-                    for k_sub_itr in self.cluster_id_for_subcluster:
-                        c_sub_mu = self.CDPmodel_list[k_sub_itr].c_VAE.encode(c_X, repram=False).to(device)
-                        dist = c_sub_mu - self.c_centroids[k_sub_itr].to(device)
-                        is_outlier = (dist.abs() > sd_scale * self.c_sds[k_sub_itr].to(device)).any().item()
-                        if is_outlier:
-                            c_sub_dist_k = torch.tensor(float('inf'))
-                        else: 
-                            c_sub_dist_k = (dist / (self.c_sds[k_sub_itr].to(device))).norm()
-                        c_sub_dists.append(c_sub_dist_k)
-
-                    stacked_c_sub_dists = torch.stack(c_sub_dists)
-                    
-                    if stacked_c_sub_dists.min().item() < float('inf'):
-                        c_cluster_tep = self.cluster_id_for_subcluster[torch.argmin(stacked_c_sub_dists).item()]
-                        c_cluster.append(c_cluster_tep)
-                
-            if len(c_cluster) == 0:
-                c_cluster.append(-1)    # check through subclusters
-
                          
             # find the cluster of D
             if d_name in self.d_in_trainnig:
 
-                for k_itr in (self.which_non_empty_cluster + self.cluster_id_for_subcluster):
+                for k_itr in self.which_non_empty_cluster:
                     if d_name in self.d_name_clusters_in_trainnig[k_itr]:
                         d_cluster.append(k_itr)
                 
@@ -145,58 +118,40 @@ class CDPmodel(nn.Module):
                 if stacked_d_dists.min().item() < float('inf'):
                     d_cluster_tep = self.which_non_empty_cluster[torch.argmin(stacked_d_dists).item()]
                     d_cluster.append(d_cluster_tep)
-
-                # search through subclusters
-                d_sub_dists = []
-                for k_sub_itr in self.cluster_id_for_subcluster:
-                    d_sub_mu = self.CDPmodel_list[k_sub_itr].d_VAE.encode(d_X, repram=False)
-                    dist = d_sub_mu.to(device) - self.d_centroids[k_sub_itr].to(device)
-                    is_outlier = (dist.abs() > sd_scale * self.d_sds[k_sub_itr].to(device)).any().item()
-                    if is_outlier:
-                        d_sub_dist_k = torch.tensor(float('inf'))
-                    else: 
-                        d_sub_dist_k = (dist / (self.d_sds[k_sub_itr].to(device))).norm()
-                    d_sub_dists.append(d_sub_dist_k)
-
-                stacked_d_sub_dists = torch.stack(d_sub_dists)
                 
-                if stacked_d_sub_dists.min().item() < float('inf'):
-                    d_cluster_tep = self.cluster_id_for_subcluster[torch.argmin(stacked_d_sub_dists).item()]
-                    d_cluster.append(d_cluster_tep)
-                
-            if len(d_cluster) == 0:
+            
+            if len(d_cluster) == 0 and len(c_cluster) == 0:
                 d_cluster.append(-1)    # check through subclusters
-    
-            # Loop through clusters of C and D to find CDR
-            CDR_tmp_list = []
-            cluster_tmp_list =[]
-            
-            if c_name in self.c_in_trainnig and d_name in self.d_in_trainnig: 
-                cd_clusters = list(set(c_cluster).intersection(set(d_cluster)))
-            else:
-                cd_clusters = list(set(c_cluster + d_cluster))
-            
-            for k in cd_clusters:
-                if k != -1:
-                    CDR_temp = self.predict_given_model(self.CDPmodel_list[k], c_X, d_X, device)
-                    CDR_tmp_list.append(CDR_temp)
-                    
-                    if (k in c_cluster and k in d_cluster) or CDR_temp >= self.sens_cutoff:
-                        cluster_tmp_list.append(k)
-                    else:
-                        cluster_tmp_list.append(None)
-            
-            idx_notNone = [i for i, item in enumerate(cluster_tmp_list) if item is not None]
-            
-            if len(idx_notNone) > 0:
-                CDR = [CDR_tmp_list[i] for i in idx_notNone]
-                cluster = [cluster_tmp_list[i] for i in idx_notNone]
-
-                CDR = format_list_as_string(CDR)
-                cluster = format_list_as_string(cluster)
-            else:
+                c_cluster.append(-1)    # check through subclusters
                 CDR = 0
                 cluster = -1
+            else: 
+                # Loop through clusters of C and D to find CD bicluster
+                CDR_tmp_list = []
+
+                cd_clusters = list(set(c_cluster).intersection(set(d_cluster)))
+                
+                if len(cd_clusters) == 0:
+                    cd_clusters = list(set(c_cluster + d_cluster))
+                    # print(f"find c OR d cluster: {cd_clusters}, where c cluster {c_cluster} c name {c_name} and d {d_cluster} {d_name}")
+                # else:
+                    # print(f"find cd cluster: {cd_clusters}, where c cluster {c_cluster} c name {c_name} and d {d_cluster} {d_name}")            # Loop through clusters of C and D to find CDR
+            
+                if len(c_cluster) == 0:
+                    c_cluster.append(-1)
+                if len(d_cluster) == 0:
+                    d_cluster.append(-1)
+
+                for k in cd_clusters:
+                    if k != -1:
+                        CDR_temp = self.predict_given_model(self.CDPmodel_list[k], c_X, d_X, device)
+                        CDR_tmp_list.append(CDR_temp)
+
+                if len(CDR_tmp_list) == 0:
+                    CDR_tmp_list.append(0)
+
+                CDR = format_list_as_string(CDR_tmp_list)
+                cluster = format_list_as_string(cd_clusters)
 
             c_cluster = format_list_as_string(c_cluster)
             d_cluster = format_list_as_string(d_cluster)
@@ -278,22 +233,6 @@ class CDPmodel(nn.Module):
         self.c_in_trainnig = c_data.index.values
         self.d_in_trainnig = d_data.index.values
 
-        if search_subcluster:
-            losses_train_hist_list_sub = []
-            best_epos_list_sub = []
-
-            c_centroids_sub = [None] * self.K
-            c_sds_sub = [None] * self.K
-            d_centroids_sub = [None] * self.K
-            d_sds_sub = [None] * self.K
-
-            c_name_clusters_in_trainnig_sub = [None] * self.K
-            d_name_clusters_in_trainnig_sub = [None] * self.K
-
-            if return_latents:
-                c_latent_list_sub = []
-                d_latent_list_sub = []
-
 
         # 1. Pre-train a C-VAE and D-VAE on all cells and compounds (no clustering loss).  Copy each k-times as each initial bi-cluster VAE.
         print(f"=> Initialize C-VAE:")
@@ -322,14 +261,6 @@ class CDPmodel(nn.Module):
             if return_latents:
                 c_latent_k = []
                 d_latnet_k = []
-
-            if search_subcluster:
-                losses_train_hist_list_k_1 = []
-                best_epos_k_1 = []
-
-                if return_latents:
-                    c_latent_k_1 = []
-                    d_latnet_k_1 = []
 
             meta_key = "k" + str(k)
             c_meta_k = c_meta[[meta_key]].rename(columns={meta_key:'key'})
@@ -366,19 +297,16 @@ class CDPmodel(nn.Module):
                     # returns
                     c_meta_hist[f'k{k}_b{b}'] = None
                     d_sens_hist[f'sensitive_k{k}_b{b}'] = None
-                    losses_train_hist_list_k.append(None)
-                    best_epos_k.append(None)
+                    losses_train_hist_list.append(None)
+                    best_epos_list.append(None)
 
                     if return_latents:
-                        c_latent_k.append(None)
-                        d_latnet_k.append(None)
+                        c_latent_list.append(None)
+                        d_latent_list.append(None)
 
                     break
 
                 else:
-                    if b == n_rounds - 1:
-                        self.which_non_empty_cluster.append(k)
-
                     # store the centroids
                     self.c_centroids[k] = c_centroid
                     self.c_sds[k] = c_sd
@@ -399,25 +327,20 @@ class CDPmodel(nn.Module):
                         c_latent_k.append(c_latent.detach().cpu().numpy())
                         d_latent = self.CDPmodel_list[k].d_VAE.encode(torch.from_numpy(d_data.values).float().to(device), repram=False)
                         d_latnet_k.append(d_latent.detach().cpu().numpy())
+                    
+                    if b == n_rounds - 1:
+                        self.which_non_empty_cluster.append(k)
+
+                        losses_train_hist_list.append(losses_train_hist_list_k)
+                        best_epos_list.append(best_epos_k)
+
+                        if return_latents:
+                            c_latent_list.append(c_latent_k)
+                            d_latent_list.append(d_latnet_k)
                 
                 ## Use multiprocessing to run the loop in parallel for each k
                 # with multiprocessing.Pool() as pool:
                 # s    pool.map(train_k, range(0, self.K))
-            
-            if k in self.which_non_empty_cluster:                    
-                losses_train_hist_list.append(losses_train_hist_list_k)
-                best_epos_list.append(best_epos_k)
-
-                if return_latents:
-                    c_latent_list.append(c_latent_k)
-                    d_latent_list.append(d_latnet_k)
-            else:
-                losses_train_hist_list.append(None)
-                best_epos_list.append(None)
-
-                if return_latents:
-                    c_latent_list.append(None)
-                    d_latent_list.append(None)
             
 
             if search_subcluster and not zero_cluster:
@@ -427,93 +350,21 @@ class CDPmodel(nn.Module):
                 print(f"  === {k}.2. sub local CDP model      ")
                 print(f"  ===================================")
 
-                self.CDPmodel_list_sub[k].load_state_dict(self.CDPmodel_list[k].state_dict())
+                zero_cluster_sub, c_meta_hist, d_sens_hist = self.find_subcluster(
+                        k, c_data, d_data, cdr, c_meta_k,
+                        n_rounds, train_params, return_latents, 
+                        c_meta_hist, d_sens_hist, losses_train_hist_list, best_epos_list,
+                        device, c_latent_list, d_latent_list)
 
-                c_name_k_1 = self.c_name_clusters_in_trainnig[k]
-                d_name_k_1 = self.d_name_clusters_in_trainnig[k]
-
-                d_data_1 = d_data.drop(d_name_k_1)
-                cdr_1 = cdr.drop(columns=d_name_k_1)
-
-                d_sens_hist_1 = pd.DataFrame() 
-
-                for b in range(0, n_rounds):
-                    print(f"     -- round {b} -------------")     
-
-                    if b == 0:
-                        d_sens_hist_1[f'sensitive_k{k}'] = (cdr_1.loc[c_meta_k.index.values[c_meta_k.key == 1]].mean(axis=0) > self.sens_cutoff).astype(int)
-                        d_names_k_init_1 = d_sens_hist_1.index.values[d_sens_hist_1[f'sensitive_k{k}']==1]
-
-                        c_names_k_init_1 = c_name_k_1
-
-                        sensitive_cut_off = 0.2
-                    else:
-                        d_names_k_init_1 = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}_sub_b{b-1}']==1]
-                        c_names_k_init_1 = c_meta_hist.index.values[c_meta_hist[f'k{k}_sub_b{b-1}']==1]
-
-                        sensitive_cut_off = self.sens_cutoff
-
-                        # if b == 1:
-                        #     sensitive_cut_off = 0.4
-                        # else:
-                        #     sensitive_cut_off = self.sens_cutoff
-
-                    train_results = train_CDPmodel_local_1round(self.CDPmodel_list_sub[k], device, True, c_data, c_meta_k, d_data_1, \
-                                                                                    cdr_1, c_names_k_init_1, d_names_k_init_1, sensitive_cut_off, k, train_params)
-                    zero_cluster_sub, c_centroid_1, d_centroid_1, c_sd_1, d_sd_1, c_name_cluster_k_1, d_name_sensitive_k_1, losses_train_hist_1, best_epos_1, c_meta_k_1, d_sens_k_1 = train_results
-                    # print(c_meta_k_1)
-
-                    if(zero_cluster_sub):
-                        print("  No subcluster found")
-
-                        losses_train_hist_list_k_1.append(None)
-                        best_epos_k.append(None)
-                        
-                        if return_latents:
-                            c_latent_k_1.append(None)
-                            d_latnet_k_1.append(None)
-
-                        break
-                    else:
-
-                        if b == n_rounds - 1:
-                            self.which_non_empty_subcluster.append(k)
-
-                        # store/update the centroids
-                        c_centroids_sub[k] = c_centroid_1
-                        c_sds_sub[k] = c_sd_1
-                        d_centroids_sub[k] = d_centroid_1
-                        d_sds_sub[k] = d_sd_1
-                        c_name_clusters_in_trainnig_sub[k] = c_name_cluster_k_1
-                        d_name_clusters_in_trainnig_sub[k] = d_name_sensitive_k_1
-
-                        c_meta_hist[f'k{k}_sub_b{b}'] = c_meta_k_1.key
-                        d_sens_hist[f'sensitive_k{k}_sub_b{b}'] = d_sens_k_1.sensitive
-                        losses_train_hist_list_k_1.append(losses_train_hist_1)
-                        best_epos_k_1.append(best_epos_1)
-
-                        if return_latents:
-                            c_latent_1 = self.CDPmodel_list_sub[k].c_VAE.encode(torch.from_numpy(c_data.values).float().to(device), repram=False)
-                            c_latent_k_1.append(c_latent_1.detach().cpu().numpy())
-                            d_latent_1 = self.CDPmodel_list_sub[k].d_VAE.encode(torch.from_numpy(d_data.values).float().to(device), repram=False)
-                            d_latnet_k_1.append(d_latent_1.detach().cpu().numpy())
-                
-                if k in self.which_non_empty_subcluster:
-                    print(f"Subcluster found as cluster {self.original_K + self.which_non_empty_subcluster.index(k)}")
-                    
-                    losses_train_hist_list_sub.append(losses_train_hist_list_k_1)
-                    best_epos_list_sub.append(best_epos_k_1)
-
-                    if return_latents:
-                        c_latent_list_sub.append(c_latent_k_1)
-                        d_latent_list_sub.append(d_latnet_k_1) 
-                else:
-                    losses_train_hist_list_sub.append(None)
-                    best_epos_list_sub.append(None)
-
-                    if return_latents:
-                        c_latent_list_sub.append(None)
-                        d_latent_list_sub.append(None)
+                while not zero_cluster_sub:
+                    print(f"   ---------------------------------")
+                    print(f"   try to find another subcluster")
+                    print(f"   ---------------------------------")
+                    zero_cluster_sub, c_meta_hist, d_sens_hist = self.find_subcluster(
+                        k, c_data, d_data, cdr, c_meta_k,
+                        n_rounds, train_params, return_latents, 
+                        c_meta_hist, d_sens_hist, losses_train_hist_list, best_epos_list,
+                        device, c_latent_list, d_latent_list)
 
         c_meta_hist = add_meta_code(c_meta_hist, self.K, n_rounds)
         d_sens_hist = add_sensk_to_d_sens_init(d_sens_hist, self.original_K)
@@ -526,42 +377,19 @@ class CDPmodel(nn.Module):
             print(f"########################################################")
             print(f"#### Check all subclusters                              ")      
             print(f"########################################################")
-            for k in range(0, self.original_K):
-                if k in self.which_non_empty_subcluster:
-                    print("update")
-                    sub_cluster_id = self.K # + 1 - 1
-                    self.K = sub_cluster_id + 1
+            all_k_with_subcuster_str = self.subcluster_map_dict.get_all_keys()
+            all_k_with_subcuster = [int(x) for x in all_k_with_subcuster_str]
 
-                    self.cluster_id_for_subcluster.append(sub_cluster_id)
+            for k in all_k_with_subcuster:
+                subcluster_id = self.subcluster_map_dict.get_from_map(str(k))
+                for k_sub in subcluster_id:
+                    print(f" - Cluster {k} found a subcluster with cluster ID: {k_sub}")
 
-                    self.CDPmodel_list.append(self.CDPmodel_list_sub[k]) 
-
-                    print(f" - Cluster {k} found a subcluster with cluster ID: {sub_cluster_id}")
-                    print(f"   - Now we have {self.K} clusters")
-
-                    self.c_centroids.append(c_centroids_sub[k])
-                    self.c_sds.append(c_sds_sub[k])
-                    self.d_centroids.append(d_centroids_sub[k])
-                    self.d_sds.append(d_sds_sub[k])
-                    self.c_name_clusters_in_trainnig.append(c_name_clusters_in_trainnig_sub[k])
-                    self.d_name_clusters_in_trainnig.append(d_name_clusters_in_trainnig_sub[k])
-
-                    for b in range(0, n_rounds):
-                        c_meta_hist[f'k{sub_cluster_id}_b{b}'] = c_meta_hist[f'k{k}_sub_b{b}']
-                        d_sens_hist[f'sensitive_k{sub_cluster_id}_b{b}'] = d_sens_hist[f'sensitive_k{k}_sub_b{b}']
-                
-                    losses_train_hist_list.append(losses_train_hist_list_sub[k])
-                    best_epos_list.append(best_epos_list_sub[k])
-
-                    if return_latents:
-                        c_latent_list.append(c_latent_list_sub[k])
-                        d_latent_list.append(d_latent_list_sub[k])
-            
-            c_meta_hist = add_meta_code_with_subcluster(c_meta_hist, self.K, n_rounds)
-            d_sens_hist = add_sensk_to_d_sens_hist_with_subcluster(d_sens_hist, self.K, n_rounds)
+            # c_meta_hist = add_meta_code_with_subcluster(c_meta_hist, self.K, n_rounds)
+            # d_sens_hist = add_sensk_to_d_sens_hist_with_subcluster(d_sens_hist, self.K, n_rounds)
         
-            c_meta_hist['code_sub_latest'] = c_meta_hist[f'code_sub_b{n_rounds-1}']
-            d_sens_hist['sensitive_k_sub_latest'] = d_sens_hist[f'sensitive_k_sub_b{n_rounds-1}']
+            # c_meta_hist['code_sub_latest'] = c_meta_hist[f'code_sub_b{n_rounds-1}']
+            # d_sens_hist['sensitive_k_sub_latest'] = d_sens_hist[f'sensitive_k_sub_b{n_rounds-1}']
 
         ## Use multiprocessing to run the loop in parallel for each k
         # with multiprocessing.Pool() as pool:
@@ -574,8 +402,116 @@ class CDPmodel(nn.Module):
 
 
 
+    def find_subcluster(
+        self, 
+        k, c_data, d_data, cdr, c_meta_k,
+        n_rounds, train_params, return_latents, 
+        c_meta_hist, d_sens_hist, losses_train_hist_list, best_epos_list,
+        device, c_latent_list, d_latent_list):
 
+        self.CDPmodel_sub_tmp.load_state_dict(self.CDPmodel_list[k].state_dict())
 
+        c_name_k_1 = self.c_name_clusters_in_trainnig[k]
+        d_name_k_1 = self.d_name_clusters_in_trainnig[k]
+
+        found_subcluster_id = self.subcluster_map_dict.get_from_map(str(k))
+        if len(found_subcluster_id) >= 1:
+            for found_k_sub in found_subcluster_id:
+                d_name_k_before_sub = self.d_name_clusters_in_trainnig[found_k_sub]
+                d_name_k_1 = np.concatenate((d_name_k_1, d_name_k_before_sub))
+
+        d_data_1 = d_data.drop(d_name_k_1)
+        cdr_1 = cdr.drop(columns=d_name_k_1)
+
+        d_sens_hist_1 = pd.DataFrame() 
+
+        losses_train_hist_list_k_1 = []
+        best_epos_k_1 = []
+
+        if return_latents:
+            c_latent_k_1 = []
+            d_latnet_k_1 = []
+
+        for b in range(0, n_rounds):
+            print(f"     -- round {b} -------------")     
+
+            if b == 0:
+                d_sens_hist_1[f'sensitive_k{k}'] = (cdr_1.loc[c_meta_k.index.values[c_meta_k.key == 1]].mean(axis=0) > self.sens_cutoff).astype(int)
+                d_names_k_init_1 = d_sens_hist_1.index.values[d_sens_hist_1[f'sensitive_k{k}']==1]
+
+                c_names_k_init_1 = c_name_k_1
+
+                sensitive_cut_off = self.sens_cutoff / 1.5
+            else:
+                d_names_k_init_1 = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}_sub_b{b-1}']==1]
+                c_names_k_init_1 = c_meta_hist.index.values[c_meta_hist[f'k{k}_sub_b{b-1}']==1]
+
+                sensitive_cut_off = self.sens_cutoff
+
+            train_results = train_CDPmodel_local_1round(self.CDPmodel_sub_tmp, device, True, c_data, c_meta_k, d_data_1, \
+                                                                            cdr_1, c_names_k_init_1, d_names_k_init_1, sensitive_cut_off, k, train_params)
+            zero_cluster_sub, c_centroid_1, d_centroid_1, c_sd_1, d_sd_1, c_name_cluster_k_1, d_name_sensitive_k_1, losses_train_hist_1, best_epos_1, c_meta_k_1, d_sens_k_1 = train_results
+            # print(c_meta_k_1)
+
+            if(zero_cluster_sub):
+                print("  No subcluster found")
+
+                return zero_cluster_sub, c_meta_hist, d_sens_hist
+
+                break
+            else:
+
+                c_meta_hist[f'k{k}_sub_b{b}'] = c_meta_k_1.key
+                d_sens_hist[f'sensitive_k{k}_sub_b{b}'] = d_sens_k_1.sensitive
+                losses_train_hist_list_k_1.append(losses_train_hist_1)
+                best_epos_k_1.append(best_epos_1)
+
+                if return_latents:
+                    c_latent_1 = self.CDPmodel_sub_tmp.c_VAE.encode(torch.from_numpy(c_data.values).float().to(device), repram=False)
+                    c_latent_k_1.append(c_latent_1.detach().cpu().numpy())
+                    d_latent_1 = self.CDPmodel_sub_tmp.d_VAE.encode(torch.from_numpy(d_data.values).float().to(device), repram=False)
+                    d_latnet_k_1.append(d_latent_1.detach().cpu().numpy())
+
+                if b == n_rounds - 1:
+
+                    k_sub = self.K
+                    self.K += 1
+                    self.subcluster_map_dict.add_to_map(str(k), k_sub)
+                    self.which_non_empty_cluster.append(k_sub)
+
+                    # store/update the centroids
+                    self.c_centroids.append(c_centroid_1)
+                    self.c_sds.append(c_sd_1)
+                    self.d_centroids.append(d_centroid_1)
+                    self.d_sds.append(d_sd_1)
+                    self.c_name_clusters_in_trainnig.append(c_name_cluster_k_1)
+                    self.d_name_clusters_in_trainnig.append(d_name_sensitive_k_1)
+
+                    losses_train_hist_list.append(losses_train_hist_list_k_1)
+                    best_epos_list.append(best_epos_k_1)
+
+                    new_colnames = {}
+                    for b_temp in range(n_rounds):
+                        old_col = f'k{k}_sub_b{b_temp}'
+                        new_col = f'k{k_sub}_b{b_temp}'
+                        new_colnames[old_col] = new_col
+                    c_meta_hist.rename(columns=new_colnames, inplace=True)
+
+                    new_colnames = {}
+                    for b_temp in range(n_rounds):
+                        old_col = f'sensitive_k{k}_sub_b{b_temp}'
+                        new_col = f'sensitive_k{k_sub}_b{b_temp}'
+                        new_colnames[old_col] = new_col
+                    d_sens_hist.rename(columns=new_colnames, inplace=True)
+
+                    if return_latents:
+                        c_latent_list.append(c_latent_k_1)
+                        d_latent_list.append(d_latnet_k_1)
+
+                    self.CDPmodel_list.append(copy.deepcopy(self.CDPmodel_sub_tmp))
+
+                    print(f"  Cluster {k} found a subcluster with cluster ID: {k_sub}")
+        return zero_cluster_sub, c_meta_hist, d_sens_hist
 
 class CDPmodel_sub(nn.Module):
     def __init__(self, params):                
