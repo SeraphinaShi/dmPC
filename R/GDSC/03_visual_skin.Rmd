@@ -40,16 +40,18 @@ set.seed(234)
 make_cdr_heatmap <- function(x, rowColor, colColor, Rowv=T, Colv=T, binary=T, title = "Cancer Drug Response"){
   
   if(binary){
-    col_cdr = c("#D9B4D5", "#6BBC47")
+    col_cdr = c("white", "#6BBC47")
     key_show = F
   } else {
-    col_cdr = colorRampPalette(c("#D9B4D5",  "white",  "#6BBC47"))(n = 20)
+    col_cdr = colorRampPalette(c("white",  "#6BBC47"))(n = 20)
     key_show = T
   }
   
   
   heatmap_cdr <- heatmap.2(
     x,
+    na.rm=TRUE,
+    na.col="darkgrey",
     Rowv = Rowv,  # perform hierarchical clustering on rows
     Colv = Colv,  # Perform hierarchical clustering on columns
     col = col_cdr,  # Use the custom binary colors
@@ -66,9 +68,9 @@ make_cdr_heatmap <- function(x, rowColor, colColor, Rowv=T, Colv=T, binary=T, ti
   )
   
   # Add legend after creating the heatmap
-  legend(y=1.15, x=0.0, xpd=TRUE, legend = c("0", "1"), fill = c("#D9B4D5", "#6BBC47"), bty = "n", cex = 0.8, title = "Sensitivity")
+  legend(y=1.15, x=0.0, xpd=TRUE, legend = c("Not Sensitive", "Sensitive", "Missing"), fill = c("white", "#6BBC47", "darkgrey"), bty = "n", cex = 0.8)
   
-  mtext("Cance\n Types", side = 2, line = 0.5, at = 1, las = 2, cex = 0.8)
+  mtext("Cancer\n Types", side = 2, line = 0.5, at = 1, las = 2, cex = 0.8)
   
   return(heatmap_cdr)
 }
@@ -167,11 +169,16 @@ c_colors <- rep(count_c_type_df$c_type_color, count_c_type_df$Freq)
 
 ```{r all_cdr_heatmap, fig.height=6, fig.width=10}
 set.seed(123)
+
+par(bg = "white")
+
 heatmap_all <- heatmap.2(
   as.matrix(cdr),
+  na.rm=TRUE,
+  na.col="darkgrey",
   Rowv = FALSE,  # Do not perform hierarchical clustering on rows
   Colv = TRUE,  # Perform hierarchical clustering on columns
-  col = c("#D9B4D5", "#6BBC47"),  # Use the custom binary colors
+  col = c("white", "#6BBC47"),  # Use the custom binary colors
   dendrogram = "both",
   trace = "none",
   key = FALSE,  # Disable the default color key
@@ -183,9 +190,19 @@ heatmap_all <- heatmap.2(
 )
 
 # Add legend after creating the heatmap
-legend(y=1.1, x=-0.075, xpd=TRUE, legend = c("0", "1"), fill = c("#D9B4D5", "#6BBC47"), bty = "n", cex = 0.8, title = "Sensitivity")
+# legend(y=1.1, x=0, xpd=TRUE, legend(y=1.15, x=0.0, xpd=TRUE, 
+#                                          legend = c("Not Sensitive", "Sensitive", "Missing"), 
+#                                          fill = c("white", "#6BBC47", "darkgrey"), 
+#                                          bty = "n", cex = 0.8), 
+#        bty = "n", cex = 0.8)
 
-mtext("Cance\n Types", side = 2, line = 0.5, at = 0.85, las = 2, cex = 0.8) # Add title to RowSideColors
+legend(x=0, y=1.2,  # Position of the legend
+       legend=c("Not Sensitive", "Sensitive", "Missing"), 
+       fill=c("white", "#6BBC47", "darkgrey"), 
+       bty="n", cex=0.8, 
+       xpd=TRUE)
+
+mtext("Cancer\n Types", side = 2, line = 0.5, at = 0.85, las = 2, cex = 0.8) # Add title to RowSideColors
 # mtext(text = c_type_levels, side = 2, line = 1, at = seq(0, 1, length.out = length(c_type_levels) + 1) - 0.5/length(c_type_levels), las = 2, cex = 0.8)
 ```
 
@@ -260,6 +277,18 @@ if(subcluster) {
   c_latent_1 <- read.csv(here(dataFolder, version_folder, "GDSC_skin_c_latent_cluster2.csv"), row.names = 1)
   d_latent_1 <- read.csv(here(dataFolder, version_folder, "GDSC_skin_d_latent_cluster2.csv"), row.names = 1)
 }
+
+# version_folder = "skin_v7" # skin_v9
+# cdr_skin_hat <- read.csv(here(dataFolder, version_folder, "GDSC_skin_cdr_hat.csv"), row.names = 1)
+# c_latent_0 <- read.csv(here(dataFolder, version_folder, "GDSC_skin_c_latent_cluster0.csv"), row.names = 1)
+# d_latent_0 <- read.csv(here(dataFolder, version_folder, "GDSC_skin_d_latent_cluster0.csv"), row.names = 1)
+# 
+# subcluster = T
+# 
+# if(subcluster) {
+#   c_latent_1 <- read.csv(here(dataFolder, version_folder, "GDSC_skin_c_latent_cluster1.csv"), row.names = 1)
+#   d_latent_1 <- read.csv(here(dataFolder, version_folder, "GDSC_skin_d_latent_cluster1.csv"), row.names = 1)
+# }
 
 c_cluster <- cdr_skin_hat[,c('c_name', 'c_cluster')] %>% unique()
 d_cluster <- cdr_skin_hat[,c('d_name', 'd_cluster')] %>% unique()
@@ -382,9 +411,9 @@ write.csv(d_meta_skin_B, here(dataFolder, "GDSC_d_meta_skin_B.csv"))
 #### EDA
 
 ```{r skin_cdr_hat_heatmap, fig.height=6, fig.width=10}
-cdr_hat_predicts <- cdr_skin_hat[,c('c_name', 'd_name', 'cdr_all')] %>% 
+cdr_hat_predicts <- cdr_skin_hat[,c('c_name', 'd_name', 'cdr_hat')] %>% 
   unique() %>% 
-  tidyr::pivot_wider(names_from = d_name, values_from = cdr_all) %>%
+  tidyr::pivot_wider(names_from = d_name, values_from = cdr_hat) %>%
   as.data.frame() %>%
   `rownames<-`(.$c_name) %>%
   select(-c_name)
@@ -405,8 +434,50 @@ if(subcluster) {
   cdr_col_color = c(rep("#f3deb7", length(d.names.skin.A)), rep("white", length(d.names.skin.NA)))
   
 }
+          
+heatmap.2(as.matrix(cdr_tmp), 
+          Rowv = F, Colv=F, 
+          na.rm=TRUE,
+          na.col="darkgrey",
+          RowSideColors = cdr_row_color,
+          ColSideColors = cdr_col_color,
+          trace='none',
+          col = colorRampPalette(c("white",  "#6BBC47"))(n = 20))
 
-cdr_heatmap_hier = make_cdr_heatmap(cdr_tmp, cdr_row_color, cdr_col_color, F, F, title = "Predicted Cancer Drug Response")
+legend(y=0.9, x=-0.1, xpd=TRUE,
+       legend = c("A","C","B"),
+       col = c("#f3deb7", "#eca680","#e3716e"),
+       lty= 1, lwd = 5, cex=.7,
+       title = "Biclusters"
+       )
+
+# cdr_heatmap_hier = make_cdr_heatmap(cdr_tmp, cdr_row_color, cdr_col_color, F, F)
+
+
+
+# 
+# col_cdr = colorRampPalette(c("#D9B4D5",  "white",  "#6BBC47"))(n = 20)
+# 
+# heatmap_cdr <- heatmap.2(
+#   cdr_tmp,
+#   Rowv = F,  # perform hierarchical clustering on rows
+#   Colv = F,  # Perform hierarchical clustering on columns
+#   col = col_cdr,  # Use the custom binary colors
+#   dendrogram = "both",
+#   trace = "none",
+#   key = T,  # Show color key
+#   RowSideColors = cdr_row_color,
+#   ColSideColors = cdr_col_color,
+#   labRow = FALSE,  # Hide row names
+#   labCol = FALSE,  # Hide column names
+#   main = title
+# )
+# 
+# # Add legend after creating the heatmap
+# legend(y=1.15, x=0.0, xpd=TRUE, legend = c("0", "1"), fill = c("#D9B4D5", "#6BBC47"), bty = "n", cex = 0.8, title = "Sensitivity")
+# 
+# mtext("Cancer\n Types", side = 2, line = 0.5, at = 1, las = 2, cex = 0.8)
+#   
 ```
 
 
@@ -431,6 +502,26 @@ if(subcluster) {
 cdr_heatmap_hier = make_cdr_heatmap(cdr_tmp, cdr_row_color, cdr_col_color, F, F)
 ```
 
+
+
+```{r skin_cdr_heatmap_heatmap_cluster, fig.height=6, fig.width=10}
+if(subcluster) {
+    cdr_tmp = as.matrix(cdr_skin[c.names.skin, d.names.skin])
+
+    cdr_row_color = c(rep("#f3deb7", length(c.names.skin.A)), rep("#eca680", length(c.names.skin.AB)),
+              rep("#e3716e", length(c.names.skin.B)),  rep("white", length(c.names.skin.NA)))
+    cdr_col_color = c(rep("#f3deb7", length(d.names.skin.A)), rep("#eca680", length(d.names.skin.AB)),
+              rep("#e3716e", length(d.names.skin.B)),  rep("white", length(d.names.skin.NA)))
+  
+} else{
+  cdr_tmp = as.matrix(cdr_skin[c(c.names.skin.A, c.names.skin.NA), c(d.names.skin.A, d.names.skin.NA)])
+
+  cdr_row_color = c(rep("#f3deb7", length(c.names.skin.A)), rep("white", length(c.names.skin.NA)))
+  cdr_col_color = c(rep("#f3deb7", length(d.names.skin.A)), rep("white", length(d.names.skin.NA)))
+  
+}
+cdr_heatmap_hier = make_cdr_heatmap(cdr_tmp, cdr_row_color, cdr_col_color, T, T)
+```
 
 ```{r all_cdr_col_skin_order_heatmap, fig.height=6, fig.width=12}
 cdr_tmp <- as.matrix(cdr)
@@ -479,12 +570,11 @@ cdr_heatmap = make_cdr_heatmap(cdr_tmp_all_skin, cdr_all_row_color, cdr_all_col_
 ```
 
 
-
 ### c latent
 ```{r , fig.width=10, fig.height=6}
 
 if(subcluster) {
-    c_latent_0_tmp = as.matrix(c_latent_0[c.names.skin, ])
+    c_latent_0_tmp = as.matrix(c_latent_0[c(c.names.skin.A, c.names.skin.AB, c.names.skin.B, c.names.skin.NA), ])
 
     cdr_row_color = c(rep("#f3deb7", length(c.names.skin.A)), rep("#eca680", length(c.names.skin.AB)),
               rep("#e3716e", length(c.names.skin.B)),  rep("white", length(c.names.skin.NA)))
@@ -501,6 +591,8 @@ heatmap.2(
     c_latent_0_tmp,
     Rowv = F,  # perform hierarchical clustering on rows
     Colv = T,  # Perform hierarchical clustering on columns
+    na.rm=TRUE,
+    na.col="darkgrey",
     col =  colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299), 
     RowSideColors = cdr_row_color,
     trace = "none",  # Do not show trace
@@ -510,7 +602,7 @@ heatmap.2(
 )
   
 # Add legend after creating the heatmap
-legend(y=1.15, x=0.0, xpd=TRUE, legend = c("0", "1"), fill = c("#D9B4D5", "#6BBC47"), bty = "n", cex = 0.8, title = "Embedded Cancer data")
+legend(y=1.15, x=0.0, xpd=TRUE, bty = "n", cex = 0.8, title = "Embedded Cancer data")
 
 
 ```
@@ -518,7 +610,7 @@ legend(y=1.15, x=0.0, xpd=TRUE, legend = c("0", "1"), fill = c("#D9B4D5", "#6BBC
 ```{r , fig.width=10, fig.height=6}
 
 if(subcluster) {
-    c_latent_1_tmp = as.matrix(c_latent_1[c.names.skin, ])
+    c_latent_1_tmp = as.matrix(c_latent_1[c(c.names.skin.A, c.names.skin.AB, c.names.skin.B, c.names.skin.NA), ])
 
     cdr_row_color = c(rep("#f3deb7", length(c.names.skin.A)), rep("#eca680", length(c.names.skin.AB)),
               rep("#e3716e", length(c.names.skin.B)),  rep("white", length(c.names.skin.NA)))
@@ -537,7 +629,7 @@ if(subcluster) {
   )
     
   # Add legend after creating the heatmap
-  legend(y=1.15, x=0.0, xpd=TRUE, legend = c("0", "1"), fill = c("#D9B4D5", "#6BBC47"), bty = "n", cex = 0.8, title = "Embedded Cancer data")
+  legend(y=1.15, x=0.0, xpd=TRUE, bty = "n", cex = 0.8, title = "Embedded Cancer data")
 
 }
 
@@ -579,7 +671,7 @@ heatmap.2(
 )
   
 # Add legend after creating the heatmap
-legend(y=1.15, x=0.0, xpd=TRUE, legend = c("0", "1"), fill = c("#D9B4D5", "#6BBC47"), bty = "n", cex = 0.8, title = "Embedded Cancer data")
+legend(y=1.15, x=0.0, xpd=TRUE, bty = "n", cex = 0.8, title = "Embedded Cancer data")
 
 
 ```
@@ -606,7 +698,7 @@ if(subcluster) {
   )
     
   # Add legend after creating the heatmap
-  legend(y=1.15, x=0.0, xpd=TRUE, legend = c("0", "1"), fill = c("#D9B4D5", "#6BBC47"), bty = "n", cex = 0.8, title = "Embedded Cancer data")
+  legend(y=1.15, x=0.0, xpd=TRUE,  bty = "n", cex = 0.8, title = "Embedded Cancer data")
 
 }
 
@@ -618,7 +710,7 @@ if(subcluster) {
 
 ## Other method: BCPlaid
 ```{r}
-library("biclust") 
+library("biclust")
 
 cdr_bi_skin <- cdr_skin
 cdr_bi_skin[is.na(cdr_bi_skin)] = -1
@@ -628,14 +720,14 @@ cdr_bi_skin <- as.matrix(cdr_bi_skin)
 
 ```{r}
 # bicResult <- biclust(cdr_bi_skin, method=BCPlaid(), verbose=FALSE)
-# 
+#
 # heatmapBC(cdr_bi_skin, bicResult)
 ```
 ```{r}
-# bicResult <- biclust(cdr_bi_skin, method=BCPlaid(), 
-#                      background = T,  
+# bicResult <- biclust(cdr_bi_skin, method=BCPlaid(),
+#                      background = T,
 #                      background.layer	= -1, verbose=FALSE)
-# 
+#
 # heatmapBC(cdr_bi_skin, bicResult)
 ```
 
@@ -737,7 +829,87 @@ library(CancerSubtypes)
 result=ExecuteCNMF(c_data_skin,clusterNum=2,nrun=30)
 
 row_idx <- c(which(result$group == 1), which(result$group == 2))
-cdr_row_color <- c(rep("lightpink", sum(result$group == 1)), rep("#eca680", sum(result$group == 2)))
+cdr_row_color <- c(rep("lightpink", sum(result$group == 1)), rep("#FDEA9C", sum(result$group == 2)))
+
+cdr_heatmap_skin_subtype = make_cdr_heatmap(as.matrix(cdr_skin[row_idx, ]), cdr_row_color, rep("white", ncol(cdr_skin)), F, T)
+```
+
+```{r, fig.width=10, fig.height=6}
+heatmap_c_data <- heatmap.2(as.matrix(c_data_skin[row_idx, ]),  # Exclude non-numeric columns
+                         Rowv = F,  # Do not perform hierarchical clustering on rows
+                         Colv = T,  # perform hierarchical clustering on columns
+                         col = colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299),  # Apply custom colors to heatmap
+                         dendrogram = "both",  # show dendrograms
+                         trace = "none",  # Do not show trace
+                         key = T,  # Show color key
+                         RowSideColors = cdr_row_color,  # Row annotation color
+                         labRow = T,  # Hide row names
+                         labCol = F,  # Hide column names
+                         main = "Cancer preprocessed RNAseq Data"
+                         )
+```
+
+
+```{r  fig.height=6, fig.width=10}
+result=ExecuteCNMF(c_data_skin,clusterNum=3,nrun=30)
+
+row_idx <- c(which(result$group == 1), which(result$group == 2), which(result$group == 3))
+cdr_row_color <- c(rep("lightpink", sum(result$group == 1)), rep("#FDEA9C", sum(result$group == 2)),
+                   rep("#D9B4D5", sum(result$group == 3)))
+
+cdr_heatmap_skin_subtype = make_cdr_heatmap(as.matrix(cdr_skin[row_idx, ]), cdr_row_color, rep("white", ncol(cdr_skin)), F, T)
+```
+
+```{r, fig.width=10, fig.height=6}
+heatmap_c_data <- heatmap.2(as.matrix(c_data_skin[row_idx, ]),  # Exclude non-numeric columns
+                         Rowv = F,  # Do not perform hierarchical clustering on rows
+                         Colv = T,  # perform hierarchical clustering on columns
+                         col = colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299),  # Apply custom colors to heatmap
+                         dendrogram = "both",  # show dendrograms
+                         trace = "none",  # Do not show trace
+                         key = T,  # Show color key
+                         RowSideColors = cdr_row_color,  # Row annotation color
+                         labRow = T,  # Hide row names
+                         labCol = F,  # Hide column names
+                         main = "Cancer preprocessed RNAseq Data"
+                         )
+```
+
+```{r  fig.height=6, fig.width=10}
+result=ExecuteCNMF(c_data_skin,clusterNum=4,nrun=30)
+
+row_idx <- c(which(result$group == 1), which(result$group == 2), 
+             which(result$group == 3), which(result$group == 4))
+cdr_row_color <- c(rep("lightpink", sum(result$group == 1)), rep("#FDEA9C", sum(result$group == 2)),
+                   rep("#D9B4D5", sum(result$group == 3)), rep("#94D8D8", sum(result$group == 4)))
+
+cdr_heatmap_skin_subtype = make_cdr_heatmap(as.matrix(cdr_skin[row_idx, ]), cdr_row_color, rep("white", ncol(cdr_skin)), F, T)
+```
+
+```{r, fig.width=10, fig.height=6}
+heatmap_c_data <- heatmap.2(as.matrix(c_data_skin[row_idx, ]),  # Exclude non-numeric columns
+                         Rowv = F,  # Do not perform hierarchical clustering on rows
+                         Colv = T,  # perform hierarchical clustering on columns
+                         col = colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299),  # Apply custom colors to heatmap
+                         dendrogram = "both",  # show dendrograms
+                         trace = "none",  # Do not show trace
+                         key = T,  # Show color key
+                         RowSideColors = cdr_row_color,  # Row annotation color
+                         labRow = T,  # Hide row names
+                         labCol = F,  # Hide column names
+                         main = "Cancer preprocessed RNAseq Data"
+                         )
+```
+
+
+```{r  fig.height=6, fig.width=10}
+result=ExecuteCNMF(c_data_skin,clusterNum=5,nrun=30)
+
+row_idx <- c(which(result$group == 1), which(result$group == 2), 
+             which(result$group == 3), which(result$group == 4), which(result$group == 5))
+cdr_row_color <- c(rep("lightpink", sum(result$group == 1)), rep("#eca680", sum(result$group == 2)),
+                   rep("#D9B4D5", sum(result$group == 3)), rep("#94D8D8", sum(result$group == 4)),
+                    rep("#FDEA9C", sum(result$group == 5)))
 
 cdr_heatmap_skin_subtype = make_cdr_heatmap(as.matrix(cdr_skin[row_idx, ]), cdr_row_color, rep("white", ncol(cdr_skin)), F, T)
 ```

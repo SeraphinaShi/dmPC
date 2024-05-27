@@ -1,0 +1,820 @@
+---
+title: "GDSC Cell Line Data Preprocessing"
+author: "Seraphina Shi"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r load_libs,  message=FALSE, warning=FALSE} 
+library(here)
+library(data.table)
+library(readxl)
+library(dplyr)
+library(gtsummary)
+library(stringr)
+library(ggplot2)
+# library(impute)
+library(gplots)
+library(tidyr)
+library(reshape2)
+```
+
+```{r setup}
+plotFolder <- here("images", "GDSC", "02_EDA")
+if(!file.exists(plotFolder)) dir.create(plotFolder,recursive=TRUE)
+
+dataFolder <- here("data", "GDSC")
+if(!file.exists(dataFolder)) dir.create(dataFolder,recursive=TRUE)
+
+knitr::opts_chunk$set(
+  cache=FALSE, autodep=FALSE, warning=FALSE, message=FALSE, echo=TRUE,
+  results = 'markup', dev='png', dpi=350, fig.align = "center", fig.path = paste0(plotFolder, "/"),
+  cache.path=".cache/",
+  duplicate.label="allow"
+)
+
+set.seed(234)
+```
+
+```{r}
+make_cdr_heatmap <- function(x, rowColor, colColor, Rowv=T, Colv=T, binary=T, title = "Cancer Drug Response"){
+  
+  if(binary){
+    col_cdr = c("#D9B4D5", "#6BBC47")
+    key_show = F
+  } else {
+    col_cdr = colorRampPalette(c("#D9B4D5",  "white",  "#6BBC47"))(n = 20)
+    key_show = T
+  }
+  
+  
+  heatmap_cdr <- heatmap.2(
+    x,
+    Rowv = Rowv,  # perform hierarchical clustering on rows
+    Colv = Colv,  # Perform hierarchical clustering on columns
+    col = col_cdr,  # Use the custom binary colors
+    dendrogram = "both",
+    trace = "none",
+    key = key_show,  # Disable the default color key
+    RowSideColors = rowColor,
+    ColSideColors = colColor,
+    labRow = FALSE,  # Hide row names
+    labCol = FALSE,  # Hide column names
+    main = title,
+    lwid = c(0.2, 5),
+    lhei = c(1, 5)
+  )
+  
+  # Add legend after creating the heatmap
+  legend(y=1.15, x=0.0, xpd=TRUE, legend = c("0", "1"), fill = c("#D9B4D5", "#6BBC47"), bty = "n", cex = 0.8, title = "Sensitivity")
+  
+  mtext("Cance\n Types", side = 2, line = 0.5, at = 1, las = 2, cex = 0.8)
+  
+  return(heatmap_cdr)
+}
+
+make_cdr_heatmap_fillna_binary <- function(x, rowColor, colColor, Rowv=T, Colv=T, binary=T, title = "Cancer Drug Response"){
+  
+    x[is.na(x)] <- -1
+    col_cdr = c("white", "#D9B4D5", "#6BBC47")
+    key_show = F
+  
+  heatmap_cdr <- heatmap.2(
+    x,
+    Rowv = Rowv,  # perform hierarchical clustering on rows
+    Colv = Colv,  # Perform hierarchical clustering on columns
+    col = col_cdr,  # Use the custom binary colors
+    dendrogram = "both",
+    trace = "none",
+    key = key_show,  # Disable the default color key
+    RowSideColors = rowColor,
+    ColSideColors = colColor,
+    labRow = FALSE,  # Hide row names
+    labCol = FALSE,  # Hide column names
+    main = title,
+    lwid = c(0.2, 5),
+    lhei = c(1, 5)
+  )
+  
+  # Add legend after creating the heatmap
+  legend(y=1.15, x=0.0, xpd=TRUE, legend = c("0", "1"), fill = c("#D9B4D5", "#6BBC47"), bty = "n", cex = 0.8, title = "Sensitivity")
+  
+  mtext("Cance\n Types", side = 2, line = 0.5, at = 1, las = 2, cex = 0.8)
+  
+  return(heatmap_cdr)
+}
+```
+
+
+# All cancer types
+```{r load_data}
+c_data <- read.csv(here(dataFolder, "c_data.csv"), row.names = 1)
+c_meta <- read.csv(here(dataFolder, "c_meta.csv"))
+d_data <- read.csv(here(dataFolder, "d_data.csv"), row.names = 1)
+d_meta <- read.csv(here(dataFolder, "Drug_list2022.csv"))
+
+d_meta <- d_meta %>% dplyr::select(Drug.Id, Name, Synonyms, Targets, Target.pathway, PubCHEM, Screening.site) %>% unique()
+
+cdr <- read.csv(here(dataFolder, "cdr.csv"), row.names = 1)
+colnames(cdr) <- gsub("^X", "",  colnames(cdr))
+
+cat("Cancer RNAseq data dim: ", dim(c_data))
+cat("Drug PCA-based feature data dim: ", dim(d_data))
+cat("CDR data dim: ", dim(cdr))
+```
+
+```{r cancer_type_counts, fig.height=4, fig.width=6}
+
+c_type_levels = c("ALL", "LAML", "LCML", # leukemia
+           "CLL", "DLBC", # lymphoma
+           "MM",# blood, myeloma
+           "LGG", # Brain Lower Grade Glioma 	胶质瘤, nervous_system
+           "GBM", # Glioblastoma multiforme	多形成性胶质细胞瘤, nervous_system
+           "MB", # nervous_system
+           "NB", # neoblastoma 神经母细胞瘤
+           "HNSC", # head & neck 头颈鳞状细胞癌
+           "SKCM", # Skin Cutaneous Melanoma	皮肤黑色素瘤
+           "BRCA", # breast
+           "STAD", # Stomach adenocarcinoma	胃癌
+           "ESCA", # Esophageal 食管癌
+           "KIRC", # Kidney
+           "LIHC", # liver
+           "LUAD", "LUSC", # lung, lung_NSCLC
+           "SCLC", # lung
+           "MESO", # Mesothelioma 间皮瘤, lung
+           "COAD/READ", # colon,
+           "PAAD", # Pancreatic adenocarcinoma	胰腺癌
+           "THCA", # Thyroid carcinoma	甲状腺癌, thyroid
+           "OV", # Ovarian serous cystadenocarcinoma	卵巢浆液性囊腺癌, urogenital_system
+           "UCEC", # Uterine Corpus Endometrial Carcinoma	子宫内膜癌, urogenital_system
+           "PRAD", # Prostate adenocarcinoma	前列腺癌, urogenital_system
+           "BLCA", # Bladder, urogenital_system
+           "CESC" # Cervical squamous cell carcinoma and endocervical adenocarcinoma 宫颈鳞癌和腺癌, urogenital_system
+           ) 
+
+c_meta$cancer_type <- factor(c_meta$cancer_type, levels = c_type_levels)
+
+
+c_type_color = c("#8B2323", "#FF4040", "#FF7256","#FFD300", "#F6FF00",  # leukemia, lymphoma
+                 "#00FFE5",
+                 "#5800FF", "#C100FF","#AB82FF", # nervous_system
+                 "#CAFF70", "#FFB6C1", "#C1FFC1", "#FFB90F",  "#AEEEEE", "#FF83FA", "#9AFF9A", "#FFBBFF", 
+                 "#007BFF",  "#4876FF", "#00BFFF", "#00E5FF", # lung
+                 "#FF6A00", "#BFEFFF", "#FF6EB4",
+                 "#00FF7B", "#C1FF00","#58FF00",  "#CAFF70", "#00FFB0", # urogenital_system
+                 "grey")
+
+names(c_type_color) = c(c_type_levels, "NA")
+
+count_c_type_df <- data.frame("c_type" = factor(names(c_type_color), levels = names(c_type_color)),
+                              "Freq"= c(as.numeric(table(c_meta$cancer_type)), sum(is.na(c_meta$cancer_type))),
+                              "c_type_color" = c_type_color)
+
+ggplot(count_c_type_df, aes(c_type, Freq, fill = c_type)) +
+  geom_col() + 
+  scale_x_discrete(limits=rev) + 
+  coord_flip() + 
+  scale_fill_manual(values = count_c_type_df$c_type_color) +
+  theme_bw() + 
+  theme(legend.position = "none") +
+  labs(x = "Cancer type", y = "Frequency")
+```
+
+```{r}
+map_value_to_color <- function(x) {
+  if (is.na(x)) {
+    return("darkgray")  # Missing values (NA) will be gray
+  } else if (x == "0") {
+    return("#E89DA0")   # 0 will be red
+  } else if (x == "1") {
+    return("#80C1C4") # 1 will be green
+  } else {
+    return("#B696B6")  # Other values will be blue
+  }
+}
+
+c_colors <- rep(count_c_type_df$c_type_color, count_c_type_df$Freq)
+```
+
+```{r all_cdr_heatmap, fig.height=6, fig.width=10}
+set.seed(123)
+heatmap_all <- heatmap.2(
+  as.matrix(cdr),
+  Rowv = FALSE,  # Do not perform hierarchical clustering on rows
+  Colv = TRUE,  # Perform hierarchical clustering on columns
+  col = c("#D9B4D5", "#6BBC47"),  # Use the custom binary colors
+  dendrogram = "both",
+  trace = "none",
+  key = FALSE,  # Disable the default color key
+  RowSideColors = c_colors,  # Row annotation color
+  labRow = FALSE,  # Hide row names
+  labCol = FALSE,  # Hide column names
+  main = "Cancer Drug Response",
+  lwid = c(0.2, 5)
+)
+
+# Add legend after creating the heatmap
+legend(y=1.1, x=-0.075, xpd=TRUE, legend = c("0", "1"), fill = c("#D9B4D5", "#6BBC47"), bty = "n", cex = 0.8, title = "Sensitivity")
+
+mtext("Cance\n Types", side = 2, line = 0.5, at = 0.85, las = 2, cex = 0.8) # Add title to RowSideColors
+# mtext(text = c_type_levels, side = 2, line = 1, at = seq(0, 1, length.out = length(c_type_levels) + 1) - 0.5/length(c_type_levels), las = 2, cex = 0.8)
+```
+
+
+# Lung
+## Input
+```{r}
+c_types <- c("LUAD","LUSC", "SCLC",  "MESO")
+
+c_meta_lung <- c_meta[c_meta$cancer_type %in% c_types, ]
+
+c_data_lung <- c_data[c_meta_lung$COSMIC_ID, ]
+cdr_lung <- cdr[as.character(c_meta_lung$COSMIC_ID), ]
+
+c_colors_lung <- c(rep("lightblue", nrow(c_data_lung)))
+```
+
+CDR
+
+```{r skin_cdr_heatmap, fig.height=6, fig.width=10}
+cdr_tmp = as.matrix(cdr_lung)
+    
+cdr_row_color = c_colors_lung
+cdr_col_color = rep('white', ncol(cdr_tmp))
+
+cdr_heatmap_hier = make_cdr_heatmap(cdr_tmp, cdr_row_color, cdr_col_color, F, F)
+```
+
+```{r skin_cdr_heatmap_clust_fillna, fig.height=6, fig.width=10}
+cdr_heatmap_hier = make_cdr_heatmap(cdr_tmp, cdr_row_color, cdr_col_color, T, F)
+```
+
+```{r skin_cdr_heatmap_clust_fillna, fig.height=6, fig.width=10}
+cdr_heatmap_hier = make_cdr_heatmap_fillna_binary(cdr_tmp, cdr_row_color, cdr_col_color, T, T)
+```
+
+Cancer expression data
+
+```{r skin_c_heatmap_hier, fig.width=10, fig.height=6}
+heatmap_c <- heatmap.2(as.matrix(c_data_lung),  # Exclude non-numeric columns
+                         Rowv = F,  # Do not perform hierarchical clustering on rows
+                         Colv = F,  # perform hierarchical clustering on columns
+                         col = colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299), 
+                         dendrogram = "both",  # show dendrograms
+                         trace = "none",  # Do not show trace
+                         key = T,  # Show color key
+                         RowSideColors = c_colors_lung,  # Row annotation color
+                         labRow = T,  # Hide row names
+                         labCol = F,  # Hide column names
+                         main = "Cancer preprocessed RNAseq Data"
+                         )
+```
+
+Drug PCA features
+```{r skin_c_heatmap_hier, fig.width=10, fig.height=6}
+heatmap_c <- heatmap.2(as.matrix(d_data),  # Exclude non-numeric columns
+                         Rowv = F,  # Do not perform hierarchical clustering on rows
+                         Colv = T,  # perform hierarchical clustering on columns
+                         col = colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299),  # Apply custom colors to heatmap
+                         dendrogram = "both",  # show dendrograms
+                         trace = "none",  # Do not show trace
+                         key = T,  # Show color key
+                         RowSideColors = rep("white", nrow(d_data)),  # Row annotation color
+                         labRow = T,  # Hide row names
+                         labCol = F,  # Hide column names
+                         main = "Drug PCA Features Data"
+                         )
+```
+
+## Output
+
+```{r}
+version_folder = "lung_5" 
+
+cdr_lung_hat <- read.csv(here(dataFolder, version_folder, 
+                            paste0("GDSC_", version_folder, "_cdr_hat.csv")), 
+                       row.names = 1)
+
+
+clust_num <- 1
+c_latent_list <- list()
+d_latent_list <- list()
+
+for (i in 0:(clust_num-1)){
+  c_latent_list[[i+1]] <- read.csv(here(dataFolder, version_folder, paste0("GDSC_", version_folder,"_c_latent_cluster", i, ".csv")), row.names = 1)
+  d_latent_list[[i+1]] <- read.csv(here(dataFolder, version_folder, paste0("GDSC_", version_folder,"_d_latent_cluster", i, ".csv")), row.names = 1)
+  
+  assign(paste0("c_latent_", i), 
+         read.csv(here(dataFolder, version_folder, paste0("GDSC_", version_folder,"_c_latent_cluster", i, ".csv")), 
+                  row.names = 1))
+  assign(paste0("d_latent_", i), 
+         read.csv(here(dataFolder, version_folder, paste0("GDSC_", version_folder,"_d_latent_cluster", i, ".csv")), 
+                  row.names = 1))
+}
+
+cdr_lung_hat$cluster <- gsub("0", "A", cdr_lung_hat$cluster)
+cdr_lung_hat$cluster <- gsub("1", "B", cdr_lung_hat$cluster)
+cdr_lung_hat$cluster <- gsub("2", "C", cdr_lung_hat$cluster)
+cdr_lung_hat$cluster <- gsub("3", "D", cdr_lung_hat$cluster)
+cdr_lung_hat$cluster <- gsub("4", "E", cdr_lung_hat$cluster)
+cdr_lung_hat$cluster <- gsub("5", "F", cdr_lung_hat$cluster)
+cdr_lung_hat$cluster[cdr_lung_hat$cluster == "-B"] <- "-1"
+
+cdr_lung_hat$c_cluster <- gsub("0", "A", cdr_lung_hat$c_cluster)
+cdr_lung_hat$c_cluster <- gsub("1", "B", cdr_lung_hat$c_cluster)
+cdr_lung_hat$c_cluster <- gsub("2", "C", cdr_lung_hat$c_cluster)
+cdr_lung_hat$c_cluster <- gsub("3", "D", cdr_lung_hat$c_cluster)
+cdr_lung_hat$c_cluster <- gsub("4", "E", cdr_lung_hat$c_cluster)
+cdr_lung_hat$c_cluster <- gsub("5", "F", cdr_lung_hat$c_cluster)
+cdr_lung_hat$c_cluster[cdr_lung_hat$c_cluster == "-B"] <- "-1"
+
+cdr_lung_hat$d_cluster <- gsub("0", "A", cdr_lung_hat$d_cluster)
+cdr_lung_hat$d_cluster <- gsub("1", "B", cdr_lung_hat$d_cluster)
+cdr_lung_hat$d_cluster <- gsub("2", "C", cdr_lung_hat$d_cluster)
+cdr_lung_hat$d_cluster <- gsub("3", "D", cdr_lung_hat$d_cluster)
+cdr_lung_hat$d_cluster <- gsub("4", "E", cdr_lung_hat$d_cluster)
+cdr_lung_hat$d_cluster <- gsub("5", "F", cdr_lung_hat$d_cluster)
+cdr_lung_hat$d_cluster[cdr_lung_hat$d_cluster == "-B"] <- "-1"
+
+c_cluster <- cdr_lung_hat[,c('c_name', 'c_cluster')] %>% unique()
+d_cluster <- cdr_lung_hat[,c('d_name', 'd_cluster')] %>% unique()
+cd_cluster <-  cdr_lung_hat[,c('c_name', 'd_name', 'cluster')] %>% unique()
+```
+
+
+```{r}
+clust_levels <- row.names(as.matrix(table(cd_cluster$cluster)))
+clust_levels <- c(clust_levels[-1], "-1")
+cd_cluster$cluster <- factor(cd_cluster$cluster, levels = clust_levels)
+table( cd_cluster$cluster, as.integer(cd_cluster$cluster))
+cd_cluster$cluster <- as.integer(cd_cluster$cluster)
+
+cd_cluster_wide <- cd_cluster %>% 
+  pivot_wider(names_from = d_name, values_from = cluster) %>% 
+  as.data.frame()
+rownames(cd_cluster_wide) <- cd_cluster_wide$c_name
+cd_cluster_wide <- cd_cluster_wide %>% select(-c_name)
+```
+```{r}
+table(d_cluster$d_cluster)
+```
+
+
+```{r}
+set.seed(45)
+init_heatmap <- heatmap.2(as.matrix(cd_cluster_wide),
+                          dendrogram = "both",
+                          trace = "none")
+
+cd_cluster_wide_new <- cd_cluster_wide[rev(init_heatmap$rowInd), init_heatmap$colInd]
+```
+
+
+```{r}
+#View(cd_cluster_wide_new)
+
+c.names.ll = c(row.names(cd_cluster_wide_new))
+d.names.ll = c(colnames(cd_cluster_wide_new))
+```
+
+
+
+```{r}
+
+cdr_hat_predicts <- cdr_lung_hat[,c('c_name', 'd_name', 'cdr_hat')] %>% 
+  unique() %>% 
+  tidyr::pivot_wider(names_from = d_name, values_from = cdr_hat) %>%
+  as.data.frame() %>%
+  `rownames<-`(.$c_name) %>%
+  select(-c_name)
+
+cdr_hat_predicts <- cdr_hat_predicts[c.names.ll, d.names.ll]
+
+```
+
+
+
+### EDA
+
+```{r skin_cdr_hat_heatmap, fig.height=6, fig.width=10}
+heatmap.2(as.matrix(cdr_hat_predicts), 
+          Rowv = F, Colv=F, 
+          trace='none',
+          col = colorRampPalette(c("#D9B4D5",  "white",  "#6BBC47"))(n = 20))
+
+heatmap.2(as.matrix(cd_cluster_wide[c.names.ll, d.names.ll]),
+          Rowv = F, Colv=F,
+          trace = "none")
+
+heatmap.2(as.matrix(cdr_lung[c.names.ll, d.names.ll]),
+          Rowv = F, Colv=F,
+          trace = "none",
+          col = colorRampPalette(c("#D9B4D5",  "white",  "#6BBC47"))(n = 20))
+
+
+row.names(c_cluster) <- c_cluster$c_name
+row.names(d_cluster) <- d_cluster$d_name
+c_cluster[c.names.ll, ]
+```
+
+# Combine cluster A and B
+```{r}
+version_folder = "ll_6" 
+
+cdr_lung_hat <- read.csv(here(dataFolder, version_folder, 
+                            paste0("GDSC_", version_folder, "_cdr_hat.csv")), 
+                       row.names = 1)
+
+cdr_lung_hat$cluster <- gsub("0", "A", cdr_lung_hat$cluster)
+cdr_lung_hat$cluster <- gsub("1", "B", cdr_lung_hat$cluster)
+cdr_lung_hat$cluster <- gsub("2", "C", cdr_lung_hat$cluster)
+cdr_lung_hat$cluster <- gsub("3", "D", cdr_lung_hat$cluster)
+cdr_lung_hat$cluster <- gsub("4", "E", cdr_lung_hat$cluster)
+cdr_lung_hat$cluster <- gsub("5", "F", cdr_lung_hat$cluster)
+cdr_lung_hat$cluster[cdr_lung_hat$cluster == "-B"] <- "-1"
+
+cdr_lung_hat$c_cluster <- gsub("0", "A", cdr_lung_hat$c_cluster)
+cdr_lung_hat$c_cluster <- gsub("1", "B", cdr_lung_hat$c_cluster)
+cdr_lung_hat$c_cluster <- gsub("2", "C", cdr_lung_hat$c_cluster)
+cdr_lung_hat$c_cluster <- gsub("3", "D", cdr_lung_hat$c_cluster)
+cdr_lung_hat$c_cluster <- gsub("4", "E", cdr_lung_hat$c_cluster)
+cdr_lung_hat$c_cluster <- gsub("5", "F", cdr_lung_hat$c_cluster)
+cdr_lung_hat$c_cluster[cdr_lung_hat$c_cluster == "-B"] <- "-1"
+
+cdr_lung_hat$d_cluster <- gsub("0", "A", cdr_lung_hat$d_cluster)
+cdr_lung_hat$d_cluster <- gsub("1", "B", cdr_lung_hat$d_cluster)
+cdr_lung_hat$d_cluster <- gsub("2", "C", cdr_lung_hat$d_cluster)
+cdr_lung_hat$d_cluster <- gsub("3", "D", cdr_lung_hat$d_cluster)
+cdr_lung_hat$d_cluster <- gsub("4", "E", cdr_lung_hat$d_cluster)
+cdr_lung_hat$d_cluster <- gsub("5", "F", cdr_lung_hat$d_cluster)
+cdr_lung_hat$d_cluster[cdr_lung_hat$d_cluster == "-B"] <- "-1"
+
+cdr_lung_hat$d_cluster[cdr_lung_hat$d_cluster %in% c("A", "A & B", "B", "A & C")] = "B"
+
+cdr_lung_hat$cluster[cdr_lung_hat$cluster %in% c("A", "A & B", "B", "A & C")] = "B"
+
+cdr_lung_hat$c_cluster[cdr_lung_hat$c_cluster  == "A & D"] = "B & D"
+cdr_lung_hat$c_cluster[cdr_lung_hat$c_cluster %in% c("A", "A & B", "B", "A & C")] = "B"
+cdr_lung_hat$c_cluster = gsub("A & B","B",cdr_lung_hat$c_cluster)
+
+
+cdr_lung_hat[cdr_lung_hat$c_name == "907274" & cdr_lung_hat$d_name == "1004", "cluster"] = "-1"
+cdr_lung_hat[cdr_lung_hat$c_name == "907272" & cdr_lung_hat$d_name == "1004", "cluster"] = "-1"
+
+cdr_lung_hat[cdr_lung_hat$c_name %in% c("907063", "1323913"), "c_cluster"] = "B & C"
+
+cdr_lung_hat$cluster[grepl("B", cdr_lung_hat$c_cluster) & grepl("B", cdr_lung_hat$d_cluster)] = "B"
+
+cdr_lung_hat$cluster <- gsub("B","A", cdr_lung_hat$cluster)
+cdr_lung_hat$c_cluster <- gsub("B","A", cdr_lung_hat$c_cluster)
+cdr_lung_hat$d_cluster <- gsub("B","A", cdr_lung_hat$d_cluster)
+
+cdr_lung_hat$cluster <- gsub("C","B", cdr_lung_hat$cluster)
+cdr_lung_hat$c_cluster <- gsub("C","B", cdr_lung_hat$c_cluster)
+cdr_lung_hat$d_cluster <- gsub("C","B", cdr_lung_hat$d_cluster)
+
+cdr_lung_hat$cluster <- gsub("D","C", cdr_lung_hat$cluster)
+cdr_lung_hat$c_cluster <- gsub("D","C", cdr_lung_hat$c_cluster)
+cdr_lung_hat$d_cluster <- gsub("D","C", cdr_lung_hat$d_cluster)
+
+c_cluster <- cdr_lung_hat[,c('c_name', 'c_cluster')] %>% unique()
+d_cluster <- cdr_lung_hat[,c('d_name', 'd_cluster')] %>% unique()
+cd_cluster <-  cdr_lung_hat[,c('c_name', 'd_name', 'cluster')] %>% unique()
+
+rownames(c_cluster) <- c_cluster$c_name
+rownames(d_cluster) <- d_cluster$d_name
+
+```
+
+
+```{r}
+clust_levels <- row.names(as.matrix(table(cd_cluster$cluster)))
+clust_levels <- c(clust_levels[-1], "-1")
+cd_cluster$cluster <- factor(cd_cluster$cluster, levels = clust_levels)
+table( cd_cluster$cluster, as.integer(cd_cluster$cluster))
+cd_cluster$cluster <- as.integer(cd_cluster$cluster)
+
+cd_cluster_wide <- cd_cluster %>% 
+  pivot_wider(names_from = d_name, values_from = cluster) %>% 
+  as.data.frame()
+rownames(cd_cluster_wide) <- cd_cluster_wide$c_name
+cd_cluster_wide <- cd_cluster_wide %>% select(-c_name)
+```
+
+```{r}
+table(d_cluster$d_cluster)
+```
+
+
+```{r}
+set.seed(123)
+init_heatmap <- heatmap.2(as.matrix(cd_cluster_wide),
+                          dendrogram = "both",
+                          trace = "none")
+
+cd_cluster_wide_1 <- cd_cluster_wide[rev(init_heatmap$rowInd), init_heatmap$colInd]
+
+cd_cluster_wide_new <- rbind(cd_cluster_wide_1[- which(rowMeans(cd_cluster_wide_1) == 4), ],
+                             cd_cluster_wide_1[which(rowMeans(cd_cluster_wide_1) == 4), ])
+```
+
+
+```{r}
+c.names.ll = c(row.names(cd_cluster_wide_new))
+d.names.ll = c(colnames(cd_cluster_wide_new))
+```
+
+
+
+```{r}
+
+cdr_hat_predicts <- cdr_lung_hat[,c('c_name', 'd_name', 'cdr_hat')] %>% 
+  unique() %>% 
+  tidyr::pivot_wider(names_from = d_name, values_from = cdr_hat) %>%
+  as.data.frame() %>%
+  `rownames<-`(.$c_name) %>%
+  select(-c_name)
+
+cdr_hat_predicts <- cdr_hat_predicts[c.names.ll, d.names.ll]
+
+```
+
+
+
+### EDA
+```{r}
+d_cluster <- d_cluster[d.names.ll, ]
+c_cluster <- c_cluster[c.names.ll, ]
+
+ColColor <- c(rep("#C79DC9", sum(d_cluster$d_cluster == "A")),
+              rep("#EAF7F7", sum(d_cluster$d_cluster == "B")),
+              rep("#FDE9F0", sum(d_cluster$d_cluster == "C")),
+              rep("white", sum(d_cluster$d_cluster == "-1")))
+
+RowColor <- rep("white", length(c.names.ll))
+RowColor[c_cluster$c_cluster == "A"] = "#C79DC9"
+RowColor[c_cluster$c_cluster == "A & B"] = "#94D8D8"
+RowColor[c_cluster$c_cluster == "B"] = "#EAF7F7"
+RowColor[c_cluster$c_cluster == "A & C"] = "#F19ABC"
+RowColor[c_cluster$c_cluster == "D"] = "#FDE9F0"
+RowColor[c_cluster$c_cluster == "A & B & C"] = "#99A9D1"
+```
+
+```{r skin_cdr_hat_heatmap, fig.height=6, fig.width=10}
+heatmap.2(as.matrix(cd_cluster_wide[c.names.ll, d.names.ll]),
+          Rowv = F, Colv=F,
+          ColSideColors = ColColor, RowSideColors = RowColor,
+          trace = "none")
+
+heatmap.2(as.matrix(cdr_hat_predicts[c.names.ll, d.names.ll]), 
+          Rowv = F, Colv=F,
+          ColSideColors = ColColor, 
+          RowSideColors = RowColor,
+          trace='none',
+          col = colorRampPalette(c("#D9B4D5",  "white",  "#6BBC47"))(n = 20))
+
+heatmap.2(as.matrix(cdr_lung[c.names.ll, d.names.ll]),
+          Rowv = F, Colv=F,
+          ColSideColors = ColColor, RowSideColors = RowColor,
+          trace = "none",
+          col = colorRampPalette(c("#D9B4D5",  "white",  "#6BBC47"))(n = 20))
+
+
+```
+
+```{r all_cdr_col_lung_order_heatmap, fig.height=6, fig.width=12}
+cdr_tmp <- as.matrix(cdr)
+cdr_tmp <- cdr_tmp[rev(heatmap_all$rowInd), rev(heatmap_all$colInd)]
+
+cdr_tmp <- cdr_tmp[c(c.names.ll, rownames(cdr_tmp)[! rownames(cdr_tmp) %in% c.names.ll]),d.names.ll]
+
+cdr_tmp_all_lung <- cdr_tmp
+
+RowColor_all <- c(RowColor, rep("white", sum(! rownames(cdr_tmp) %in% c.names.ll))) 
+
+cdr_heatmap = make_cdr_heatmap(cdr_tmp_all_lung, RowColor_all, ColColor, F, F)
+```
+
+
+### Summary table
+#### Cancer
+```{r}
+row.names(c_meta) = c_meta$COSMIC_ID
+c_meta_lung = c_meta[c.names.ll, ]
+
+row.names(c_cluster) <- c_cluster$c_name
+c_meta_lung$cluster = c_cluster[c.names.ll, ]$c_cluster
+c_meta_lung$cluster_A <- grepl("A", c_meta_lung$cluster)
+c_meta_lung$cluster_B <- grepl("B", c_meta_lung$cluster)
+c_meta_lung$cluster_C <- grepl("C", c_meta_lung$cluster)
+
+c_meta_lung_out <- c_meta_lung[, -c(1,2)] %>% select(cluster, cluster_A, cluster_B, cluster_C, everything())
+
+write.csv(c_meta_lung_out, here(dataFolder, "GDSC_c_meta_lung.csv"))
+```
+
+```{r}
+library(table1)
+
+table1(~ factor(tissue) + factor(tissue_status) + factor(sample_site) + factor(cancer_type)  | cluster, data=c_meta_lung)
+
+table1(~ factor(gender) + factor(ethnicity) + age_at_sampling | cluster, data=c_meta_lung)
+```
+
+```{r}
+paste0(c_meta_lung_out$COSMIC_ID[c_meta_lung_out$cluster_A], collapse = ", ")
+paste0(c_meta_lung_out$COSMIC_ID[c_meta_lung_out$cluster_B], collapse = ", ")
+paste0(c_meta_lung_out$COSMIC_ID[c_meta_lung_out$cluster_C], collapse = ", ")
+```
+
+
+### Drug
+```{r}
+row.names(d_meta) <- d_meta$Drug.Id
+d_meta_lung = d_meta[d.names.ll, ]
+d_meta_lung$cluster = d_cluster[d.names.ll, ]$d_cluster
+
+d_meta_lung$cluster_A <- grepl("A", d_meta_lung$cluster)
+d_meta_lung$cluster_B <- grepl("B", d_meta_lung$cluster)
+d_meta_lung$cluster_C <- grepl("C", d_meta_lung$cluster)
+
+d_meta_lung_out <- d_meta_lung %>% select(cluster,  cluster_A, cluster_B, cluster_C, everything())
+write.csv(d_meta_lung_out, here(dataFolder, "GDSC_d_meta_lung.csv"))
+          
+          
+table1(~ factor(Target.pathway) | cluster, data=d_meta_lung)
+table1(~factor(Targets) | cluster, data=d_meta_lung)
+```
+
+```{r}
+paste0(d_meta_lung_out$Name[d_meta_lung_out$cluster_A], collapse = ", ")
+paste0(d_meta_lung_out$Name[d_meta_lung_out$cluster_B], collapse = ", ")
+paste0(d_meta_lung_out$Name[d_meta_lung_out$cluster_C], collapse = ", ")
+```
+
+
+## Other method: BCPlaid
+```{r}
+library("biclust")
+
+cdr_bi_lung <- cdr_lung
+cdr_bi_lung[is.na(cdr_bi_lung)] = -1
+cdr_bi_lung <- as.matrix(cdr_bi_lung)
+```
+
+
+```{r}
+# bicResult <- biclust(cdr_bi_lung, method=BCPlaid(), verbose=FALSE)
+#
+# heatmapBC(cdr_bi_lung, bicResult)
+```
+```{r}
+# bicResult <- biclust(cdr_bi_lung, method=BCPlaid(),
+#                      background = T,
+#                      background.layer	= -1, verbose=FALSE)
+#
+# heatmapBC(cdr_bi_lung, bicResult)
+```
+
+```{r}
+bicResult <- biclust(cdr_bi_lung, method=BCPlaid(), background = F, verbose=FALSE)
+heatmapBC(cdr_bi_lung, bicResult)
+```
+
+```{r}
+bicResult <- biclust(cdr_bi_lung, method=BCPlaid(), background = F, verbose=FALSE,
+                     row.release = 0.8, col.release = 0.8)
+heatmapBC(cdr_bi_lung, bicResult)
+```
+
+```{r}
+bicResult <- biclust(cdr_bi_lung, method=BCPlaid(), background = F, verbose=FALSE,
+                     row.release = 0.5, col.release = 0.5)
+heatmapBC(cdr_bi_lung, bicResult)
+```
+
+```{r}
+bicResult <- biclust(cdr_bi_lung, method=BCPlaid(), background = F, verbose=FALSE,
+                     row.release = 0.7, col.release = 0.7)
+
+heatmapBC(cdr_bi_lung, bicResult)
+```
+
+```{r}
+cdr_bi_lung_tmp <- cdr_bi_lung + 1
+
+bicResult <- biclust(cdr_bi_lung_tmp, method=BCPlaid(), background = 0, verbose=FALSE,
+                     row.release = 0.7, col.release = 0.7)
+
+heatmapBC(cdr_bi_lung, bicResult)
+```
+
+```{r}
+bicResult <- biclust(cdr_bi_lung_tmp, method=BCPlaid(), background = 0, verbose=F,
+                     row.release = 0.8, col.release = 0.8)
+
+heatmapBC(cdr_bi_lung, bicResult)
+```
+
+```{r}
+bicResult <- biclust(cdr_bi_lung_tmp, method=BCPlaid(), background = 0, verbose=F,
+                     row.release = 0.5, col.release = 0.5)
+
+heatmapBC(cdr_bi_lung, bicResult)
+```
+
+## Other method: BCCC
+```{r}
+bicResult <- biclust(cdr_bi_lung, method=BCCC())
+
+heatmapBC(cdr_bi_lung, bicResult)
+```
+
+## Other method: BCXmotifs
+```{r}
+bicResult <- biclust(cdr_bi_lung, method=BCXmotifs())
+
+heatmapBC(cdr_bi_lung, bicResult)
+```
+## Other method: BCSpectral
+```{r}
+bicResult <- biclust(cdr_bi_lung, method=BCSpectral())
+
+heatmapBC(cdr_bi_lung, bicResult)
+```
+
+## Other method: Bimax Bicluster algorithm
+```{r}
+bicResult <- biclust(cdr_bi_lung, method=BCBimax())
+
+heatmapBC(cdr_bi_lung, bicResult)
+```
+
+
+## Other method: Questmotif Bicluster algorithm
+```{r}
+bicResult <- biclust(cdr_bi_lung, method=BCQuest())
+
+heatmapBC(cdr_bi_lung, bicResult)
+```
+
+
+
+## Other method: Consensus Clustering for cancer subtype identification
+```{r  fig.height=6, fig.width=10}
+library(CancerSubtypes)
+
+result=ExecuteCC(clusterNum=2,d=c_data_lung,maxK=10,clusterAlg="hc",distance="pearson",title="GBM")
+
+row_idx <- c(which(result$group == 1), which(result$group == 2))
+cdr_row_color <- c(rep("lightpink", sum(result$group == 1)), rep("#eca680", sum(result$group == 2)))
+
+cdr_heatmap_lung_subtype = make_cdr_heatmap(as.matrix(cdr_lung[row_idx, ]), cdr_row_color, rep("white", ncol(cdr_lung)), F, T)
+```
+
+```{r, fig.width=10, fig.height=6}
+heatmap_c_data <- heatmap.2(as.matrix(c_data_lung[row_idx, ]),  # Exclude non-numeric columns
+                         Rowv = F,  # Do not perform hierarchical clustering on rows
+                         Colv = T,  # perform hierarchical clustering on columns
+                         col = colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299),  # Apply custom colors to heatmap
+                         dendrogram = "both",  # show dendrograms
+                         trace = "none",  # Do not show trace
+                         key = T,  # Show color key
+                         RowSideColors = cdr_row_color,  # Row annotation color
+                         labRow = T,  # Hide row names
+                         labCol = F,  # Hide column names
+                         main = "Cancer preprocessed RNAseq Data"
+                         )
+```
+
+
+
+
+## Other method: Consensus Clustering for cancer subtype identification
+```{r  fig.height=6, fig.width=10}
+library(CancerSubtypes)
+
+result=ExecuteCNMF(c_data_lung, clusterNum=2, nrun=30) # add the objective 
+
+row_idx <- c(which(result$group == 1), which(result$group == 2))
+cdr_row_color <- c(rep("lightpink", sum(result$group == 1)), rep("#eca680", sum(result$group == 2)))
+
+cdr_heatmap_lung_subtype = make_cdr_heatmap(as.matrix(cdr_lung[row_idx, ]), cdr_row_color, rep("white", ncol(cdr_lung)), F, T)
+```
+
+```{r, fig.width=10, fig.height=6}
+heatmap_c_data <- heatmap.2(as.matrix(c_data_lung[row_idx, ]),  # Exclude non-numeric columns
+                         Rowv = F,  # Do not perform hierarchical clustering on rows
+                         Colv = T,  # perform hierarchical clustering on columns
+                         col = colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299),  # Apply custom colors to heatmap
+                         dendrogram = "both",  # show dendrograms
+                         trace = "none",  # Do not show trace
+                         key = T,  # Show color key
+                         RowSideColors = cdr_row_color,  # Row annotation color
+                         labRow = T,  # Hide row names
+                         labCol = F,  # Hide column names
+                         main = "Cancer preprocessed RNAseq Data"
+                         )
+```
