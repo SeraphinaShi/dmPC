@@ -491,7 +491,7 @@ rownames(cdr) = colnames(RNAseq_simu)
 
 heatmap.2(t(as.matrix(cdr)),
           trace="none",
-          col = c("#D9B4D5", "#6BBC47") ,
+          col = c("white", "#6BBC47") ,
           Colv=FALSE,
           Rowv = FALSE,
           main = "Heatmap of cancer drug response data",
@@ -552,7 +552,7 @@ for (i in 1:random01_num) {
 
 heatmap.2(as.matrix(cdr_r),
           trace="none",
-          col = c("#D9B4D5", "#6BBC47") ,
+          col = c("white", "#6BBC47") ,
           Colv=FALSE,
           Rowv = FALSE,
           main = "Heatmap of cancer drug response data",
@@ -623,7 +623,8 @@ cdr_r = cdr_r[, idx]
 
 heatmap.2(as.matrix(cdr_r),
           trace="none",
-          col = c("#D9B4D5", "#6BBC47") ,
+          na.rm=TRUE, na.col="darkgrey",
+          col = c("white", "#6BBC47") ,
           Colv=FALSE,
           Rowv = FALSE,
           main = "Heatmap of Cancer Drug Response",

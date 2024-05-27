@@ -40,16 +40,17 @@ set.seed(234)
 make_cdr_heatmap <- function(x, rowColor, colColor, Rowv=T, Colv=T, binary=T){
   
   if(binary){
-    col_cdr = c("#D9B4D5", "#6BBC47")
+    col_cdr = c("white", "#6BBC47")
     key_show = F
   } else {
-    col_cdr = colorRampPalette(c("#D9B4D5",  "white",  "#6BBC47"))(n = 20)
+    col_cdr = colorRampPalette(c( "white",  "#6BBC47"))(n = 20)
     key_show = T
   }
   
   
   heatmap_cdr <- heatmap.2(
     x,
+    na.rm=TRUE, na.col="darkgrey",
     Rowv = Rowv,  # perform hierarchical clustering on rows
     Colv = Colv,  # Perform hierarchical clustering on columns
     col = col_cdr,  # Use the custom binary colors
@@ -140,6 +141,9 @@ cdr_hat_predicts <- cdr_hat_predicts[c(which(! grepl("c0_", rownames(cdr_hat_pre
 
 
 c_labels_str <- c_labels[row.names(cdr_hat_predicts), ]$c_cluster
+c_labels_str[2] = "1 & 2"
+c_labels_str[23] = "1 & 2"
+c_labels_str[c_labels_str== "-1"] = c("1", "1", "2", "2")
 rowCol <- ifelse(c_labels_str == "1", "#F4D98E",
                         ifelse(c_labels_str == "1 & 2", "#F19ABC", "#94D8D8"))
 
@@ -148,11 +152,11 @@ colCol <- ifelse(d_labels_str == 1, "#F4D98E",
                         ifelse(d_labels_str == 2, "#F19ABC", "#94D8D8"))
           
 heatmap.2(as.matrix(cdr_hat_predicts), 
-          Rowv = F, Colv=F, 
+          Rowv = F, Colv=F,
           RowSideColors = rowCol,
           ColSideColors = colCol,
           trace='none',
-          col = colorRampPalette(c("#D9B4D5",  "white",  "#6BBC47"))(n = 20))
+          col = colorRampPalette(c( "white",  "#6BBC47"))(n = 20))
 
 legend(y=0.9, x=-0.1, xpd=TRUE,
        legend = c("A","C","B"),
@@ -319,3 +323,42 @@ heatmap.2(
   
 ```
 
+```{r fig.width=3, fig.height=2}
+
+c_labels_str <- c_labels[row.names(cdr_hat_predicts), ]$c_cluster
+
+ 
+idx <- which(c_labels_str %in% c("0", "1"))
+rowCol <- ifelse(c_labels_str == "0", "#6BBC47",  "#D9B4D5")
+
+c_latent <- c_latent_0[rownames(cdr_hat_predicts), ]
+c_latent <- c_latent[idx,]
+
+pc_results <- prcomp(c_latent, scale = TRUE)
+pc_results <- as.data.frame(pc_results$x)
+
+ggplot(data = pc_results, aes(PC1, PC2)) + 
+  geom_point(col = rowCol[idx]) +
+  theme_bw()
+
+```
+
+```{r fig.width=3, fig.height=2}
+
+
+d_labels_str <- d_labels[colnames(cdr_hat_predicts), ]$d_cluster
+idx <- which(d_labels_str %in% c(0, 1))
+
+rowCol <- ifelse(d_labels_str == 0, "#6BBC47",  "#D9B4D5")
+
+d_latent <- d_latent_0[colnames(cdr_hat_predicts),]
+d_latent <- d_latent[idx,]
+
+pc_results <- prcomp(d_latent, scale = TRUE)
+pc_results <- as.data.frame(pc_results$x)
+
+ggplot(data = pc_results, aes(PC1, PC2)) + 
+  geom_point(col = rowCol[idx]) +
+  theme_bw()
+
+```

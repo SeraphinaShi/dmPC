@@ -1,4 +1,5 @@
 from cmath import nan
+from pickle import FALSE, TRUE
 # import selectors
 import torch
 import torch.nn as nn
@@ -37,14 +38,10 @@ class CDPmodel(nn.Module):
 
         CDPmodel_list = []
         for k in range(0,self.K):
-            CDPmodel_list.append(CDPmodel_sub(params)) 
-        
-        CDPmodel_list_sub = []
-        for k in range(0,self.K):
-            CDPmodel_list_sub.append(CDPmodel_sub(params)) 
+            CDPmodel_list.append(CDPmodel_sub(params))  
         
         self.CDPmodel_list = CDPmodel_list
-        self.CDPmodel_list_sub = CDPmodel_list_sub
+        self.CDPmodel_sub_tmp = CDPmodel_sub(params)
         
         self.which_non_empty_cluster = []
         self.subcluster_map_dict = MyMap()
@@ -135,13 +132,11 @@ class CDPmodel(nn.Module):
                 CDR_tmp_list = []
                 
                 cd_clusters = list(set(c_cluster).intersection(set(d_cluster)))
+                clusters = cd_clusters
                     
                 if len(cd_clusters) == 0:
                     cd_clusters = list(set(c_cluster + d_cluster))
-                    print(f"find c OR d cluster: {cd_clusters}, where c cluster {c_cluster} c name {c_name} and d {d_cluster} {d_name}")
-                else:
-                    print(f"find cd cluster: {cd_clusters}, where c cluster {c_cluster} c name {c_name} and d {d_cluster} {d_name}")
-
+                    clusters = [-1]
                 
                 if len(c_cluster) == 0:
                     c_cluster.append(-1)
@@ -157,7 +152,7 @@ class CDPmodel(nn.Module):
                     CDR_tmp_list.append(0)
             
                 CDR = format_list_as_string(CDR_tmp_list)
-                cluster = format_list_as_string(cd_clusters)
+                cluster = format_list_as_string(clusters)
 
             c_cluster = format_list_as_string(c_cluster)
             d_cluster = format_list_as_string(d_cluster)
@@ -240,9 +235,9 @@ class CDPmodel(nn.Module):
 
         # 1. Pre-train a C-VAE and D-VAE on all cells and compounds (no clustering loss).  Copy each k-times as each initial bi-cluster VAE.
         print(f"=> Initialize C-VAE:")
-        C_VAE, C_VAE_init_losses = train_VAE(self.CDPmodel_list[0].c_VAE, device, c_data, vae_type = "C", save_path = train_params['cVAE_save_path'], params=train_params)
+        C_VAE, C_VAE_init_losses = train_VAE(self.CDPmodel_list[0].c_VAE, device, c_data, vae_type = "C", save_path = train_params['cVAE_save_path'], params=train_params, C_VAE = True)
         print(f"=> Initialize D-VAE:")
-        D_VAE, D_VAE_init_losses = train_VAE(self.CDPmodel_list[0].d_VAE, device, d_data, vae_type = "D", save_path = train_params['dVAE_save_path'], params=train_params)
+        D_VAE, D_VAE_init_losses = train_VAE(self.CDPmodel_list[0].d_VAE, device, d_data, vae_type = "D", save_path = train_params['dVAE_save_path'], params=train_params, C_VAE = False)
 
         # Assign C-VAE and D-VAE to each CDP model
         # Copy over the parameters
@@ -277,7 +272,7 @@ class CDPmodel(nn.Module):
                     d_sens_hist[f'sensitive_k{k}'] = (cdr.loc[c_meta_k.index.values[c_meta_k.key == 1]].mean(axis=0) > self.sens_cutoff).astype(int)
                     d_names_k_init = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}']==1]
 
-                    sensitive_cut_off = 0.35
+                    sensitive_cut_off = self.sens_cutoff/1.25
                 else:
                     d_names_k_init = d_sens_hist.index.values[d_sens_hist[f'sensitive_k{k}_b{b-1}']==1]
 
@@ -355,7 +350,7 @@ class CDPmodel(nn.Module):
                 print(f"  === {k}.2. sub local CDP model      ")
                 print(f"  ===================================")
 
-                zero_cluster_sub, c_meta_hist, d_sens_hist = self.find_subcluster(
+                zero_cluster_sub, c_meta_hist, d_sens_hist, c_latent_list, d_latent_list = self.find_subcluster(
                     k, c_data, d_data, cdr, c_meta_k,
                     n_rounds, train_params, return_latents, 
                     c_meta_hist, d_sens_hist, losses_train_hist_list, best_epos_list,
@@ -366,7 +361,7 @@ class CDPmodel(nn.Module):
                     print(f"   ---------------------------------")
                     print(f"   try to find another subcluster")
                     print(f"   ---------------------------------")
-                    zero_cluster_sub, c_meta_hist, d_sens_hist = self.find_subcluster(
+                    zero_cluster_sub, c_meta_hist, d_sens_hist, c_latent_list, d_latent_list = self.find_subcluster(
                         k, c_data, d_data, cdr, c_meta_k,
                         n_rounds, train_params, return_latents, 
                         c_meta_hist, d_sens_hist, losses_train_hist_list, best_epos_list,
@@ -420,7 +415,7 @@ class CDPmodel(nn.Module):
         c_meta_hist, d_sens_hist, losses_train_hist_list, best_epos_list,
         device, c_latent_list, d_latent_list):
 
-        self.CDPmodel_list_sub[k].load_state_dict(self.CDPmodel_list[k].state_dict())
+        self.CDPmodel_sub_tmp.load_state_dict(self.CDPmodel_list[k].state_dict())
 
         c_name_k_1 = self.c_name_clusters_in_trainnig[k]
         d_name_k_1 = self.d_name_clusters_in_trainnig[k]
@@ -459,7 +454,7 @@ class CDPmodel(nn.Module):
 
                 sensitive_cut_off = self.sens_cutoff
 
-            train_results = train_CDPmodel_local_1round(self.CDPmodel_list_sub[k], device, True, c_data, c_meta_k, d_data_1, \
+            train_results = train_CDPmodel_local_1round(self.CDPmodel_sub_tmp, device, True, c_data, c_meta_k, d_data_1, \
                                                                             cdr_1, c_names_k_init_1, d_names_k_init_1, sensitive_cut_off, k, train_params)
             zero_cluster_sub, c_centroid_1, d_centroid_1, c_sd_1, d_sd_1, c_name_cluster_k_1, d_name_sensitive_k_1, losses_train_hist_1, best_epos_1, c_meta_k_1, d_sens_k_1 = train_results
             # print(c_meta_k_1)
@@ -467,7 +462,7 @@ class CDPmodel(nn.Module):
             if zero_cluster_sub:
                 print("  No subcluster found")
 
-                return zero_cluster_sub, c_meta_hist, d_sens_hist
+                return zero_cluster_sub, c_meta_hist, d_sens_hist, c_latent_list, d_latent_list
 
             else:
                 c_meta_hist[f'k{k}_sub_b{b}'] = c_meta_k_1.key
@@ -476,9 +471,9 @@ class CDPmodel(nn.Module):
                 best_epos_k_1.append(best_epos_1)
 
                 if return_latents:
-                    c_latent_1 = self.CDPmodel_list_sub[k].c_VAE.encode(torch.from_numpy(c_data.values).float().to(device), repram=False)
+                    c_latent_1 = self.CDPmodel_sub_tmp.c_VAE.encode(torch.from_numpy(c_data.values).float().to(device), repram=False)
                     c_latent_k_1.append(c_latent_1.detach().cpu().numpy())
-                    d_latent_1 = self.CDPmodel_list_sub[k].d_VAE.encode(torch.from_numpy(d_data.values).float().to(device), repram=False)
+                    d_latent_1 = self.CDPmodel_sub_tmp.d_VAE.encode(torch.from_numpy(d_data.values).float().to(device), repram=False)
                     d_latnet_k_1.append(d_latent_1.detach().cpu().numpy())
                 
                 if b == n_rounds - 1:
@@ -517,11 +512,11 @@ class CDPmodel(nn.Module):
                         c_latent_list.append(c_latent_k_1)
                         d_latent_list.append(d_latnet_k_1)
 
-                    self.CDPmodel_list.append(self.CDPmodel_list_sub[k])
+                    self.CDPmodel_list.append(copy.deepcopy(self.CDPmodel_sub_tmp))
 
                     print(f"  Cluster {k} found a subcluster with cluster ID: {k_sub}")
         
-        return zero_cluster_sub, c_meta_hist, d_sens_hist
+        return zero_cluster_sub, c_meta_hist, d_sens_hist, c_latent_list, d_latent_list
 
 
 
@@ -645,9 +640,7 @@ class VAE(nn.Module):
         Encodes the inputed tensor X by passing through the encoder network.
         Return a list with two tensors, mu and log_variance of the latent space. 
         """
-        # print(f"result = self.encoder_body(X), X.size(): {X.size()}")
-        # print(f"X dim: {X.dim}")
-        # print(X)
+        
         result = self.encoder_body(X)
         mu = self.encoder_mu(result)
         log_var = self.encoder_logvar(result)

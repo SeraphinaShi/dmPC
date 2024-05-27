@@ -159,15 +159,14 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
 
     # d_sensitive_distances = torch.cdist(d_sensitive_latent, d_centroid.view(1, -1))
     d_is_outlier = find_outliers_3sd(d_sensitive_latent)
+    d_name_outlier = d_data.index.values[d_is_outlier]
 
-    if len(d_is_outlier) > 0:
-        # d_sens_k.at[d_is_outlier, 'sensitive'] = 0
-        for index in d_is_outlier:
-            d_sens_k.at[index, 'sensitive'] = 0
+    if len(d_name_outlier) > 0:
+        d_sens_k.loc[d_name_outlier, 'sensitive'] = 0
 
     print(f"       b. {sum(d_sens_k.sensitive)} sensitive drug(s)")
      
-    if sum(d_sens_k.sensitive) <= 1:
+    if sum(d_sens_k.sensitive) <= 2:
         return True, None, None, None, None, None, None, None, None, None, None
 
     #c=================================================================================
@@ -245,22 +244,20 @@ def train_CDPmodel_local_1round(model, device, ifsubmodel,
 
     # c_sensitive_distances = torch.cdist(c_sensitive_latent, c_centroid.view(1, -1))
     c_outlier_idx = find_outliers_3sd(c_sensitive_latent)
+    c_name_outlier = c_data.index.values[c_outlier_idx]
 
-    if len(c_outlier_idx) > 0:
-        for index in c_outlier_idx:
-            c_sens_k.at[index, 'sensitive'] = 0
+    if len(c_name_outlier) > 0:
+        c_sens_k.loc[c_name_outlier, 'sensitive'] = 0
 
-    old_1_boo = c_meta_k['key'] == 1
-    c_meta_k.loc[old_1_boo, 'key'] = 0
-    
-    sens_boo = c_sens_k['sensitive'] == 1
-    c_meta_k.loc[sens_boo, 'key'] = 1
-    # c_meta_k.loc[c_meta_k.index[idx_cluster_updated], 'key'] = 1
+    # update c_meta_k
+    idx = c_sens_k.index.values[c_sens_k.sensitive == 1]
+    c_meta_k.key = 0
+    c_meta_k.loc[idx, 'key'] = 1 
 
     sensitive_count = c_sens_k.sensitive.sum()
     print(f"       d. {sensitive_count} cancer cell line(s) in the cluster")
 
-    if sensitive_count <= 1:
+    if sensitive_count <= 5:
         return True, None, None, None, None, None, None, None, None, None, None
 
     losses_train_hist = [a_losses, c_losses]
@@ -684,10 +681,13 @@ def train_VAE_train(vae, device, data_loaders={}, recon_loss_weight=1, kld_weigh
 
 
 
-def train_VAE(VAE_model, device, data, vae_type, save_path, params, num_workers = 2):
+def train_VAE(VAE_model, device, data, vae_type, save_path, params, C_VAE = True, num_workers = 2):
     valid_size = params['valid_size']
     # n_epochs = params['n_epochs']
-    n_epochs = 150
+    if C_VAE: 
+        n_epochs = 500
+    else:
+        n_epochs = 200
     batch_size = params['batch_size']
     lr =  params['lr']
     if vae_type == "C":

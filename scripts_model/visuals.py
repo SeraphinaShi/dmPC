@@ -7,22 +7,14 @@ from sklearn.decomposition import PCA
 import seaborn as sns
 import torch
 
+import re
 
-def plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=1, k_sub=None, plot_save_path=''):
-    
-    
-    color_labels = np.array(list(map(str, c_meta_hist['code'].unique())))
-    for b in range(n_rounds):
-        color_labels = np.union1d(color_labels, c_meta_hist[f'code_b{b}'].unique())   
-    color_values = sns.color_palette("Set2", 20)
-    color_map = dict(zip(color_labels, color_values))
 
-    if  k_sub != None:
-        color_labels_sub = c_meta_hist[f'code_b{n_rounds - 1}'].astype(str).values
-        for b in range(n_rounds):
-            color_labels_sub = np.union1d(color_labels_sub, c_meta_hist[f'code_sub_b{b}'].unique())   
-        color_values_sub = sns.color_palette("Set2", 8)
-        color_map_sub = dict(zip(color_labels_sub, color_values_sub))
+def plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=1, plot_save_path=''):
+
+    color_values = ["#D9B4D5", "#6BBC47"]
+    color_map = dict(zip([0,1], color_values))
+    legend_labels = ['Not senstitive', 'Senstitive']
 
     pca = PCA(n_components=5)
     pca.fit(c_data)
@@ -30,116 +22,17 @@ def plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=1, k_
 
     n_pics = n_rounds+1
 
-    if k_sub == None:
-        fig, ax = plt.subplots(nrows=1, ncols=n_pics, figsize=(n_pics*5, 5))
-
-        ax[0].scatter(components[:,0],components[:,1], color=c_meta_hist['code'].astype(str).map(color_map))
-        handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
-        ax[0].legend(handlelist, color_labels, title="Prior cluster")
-        ax[0].set_xlabel('pc1')
-        ax[0].set_ylabel('pc2')
-        ax[0].set_title(f'PCA on input data (k={k})')
-
-        for b in range(n_rounds):
-            n_p = b + 1
-
-            data_b = c_latent_list[k][b]
-            pca = PCA(n_components=5)
-            pca.fit(data_b)
-            components = pca.transform(data_b)
-
-            ax[n_p].scatter(components[:,0],components[:,1], color = c_meta_hist[f'code_b{b}'].astype(str).map(color_map))
-            handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
-            ax[n_p].legend(handlelist, color_labels, title="Updated cluster")
-            ax[n_p].set_xlabel('pc1')
-            ax[n_p].set_xlabel('pc2')
-            ax[n_p].set_title(f'PCA on latent space in round {b}, (k={k})')
-    else:
-        fig, ax = plt.subplots(nrows=2, ncols=n_pics, figsize=(n_pics*5, 2*5))
-
-        ax[0,0].scatter(components[:,0],components[:,1], color=c_meta_hist['code'].astype(str).map(color_map))
-        handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
-        ax[0,0].legend(handlelist, color_labels, title="Prior cluster")
-        ax[0,0].set_xlabel('pc1')
-        ax[0,0].set_ylabel('pc2')
-        ax[0,0].set_title(f'PCA on input data (k={k})')
-
-        ax[1,0].scatter(components[:,0],components[:,1], color=c_meta_hist[f'code_b{n_rounds-1}'].astype(str).map(color_map_sub))
-        handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values_sub]
-        ax[1,0].legend(handlelist, color_labels_sub, title="Prior cluster")
-        ax[1,0].set_xlabel('pc1')
-        ax[1,0].set_ylabel('pc2')
-        ax[1,0].set_title(f'PCA on input data (k={k_sub})')
-
-        for b in range(n_rounds):
-            n_p = b + 1
-
-            data_b = c_latent_list[k][b]
-
-            pca = PCA(n_components=5)
-            pca.fit(data_b)
-            components = pca.transform(data_b)
-
-            ax[0, n_p].scatter(components[:,0],components[:,1], color = c_meta_hist[f'code_b{b}'].astype(str).map(color_map))
-            handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
-            ax[0, n_p].legend(handlelist, color_labels, title="Updated cluster")
-            ax[0, n_p].set_xlabel('pc1')
-            ax[0, n_p].set_xlabel('pc2')
-            ax[0, n_p].set_title(f'PCA on latent space in round {b}, (k={k})')
-
-            data_b_sub = c_latent_list[k_sub][b]
-
-            pca_sub = PCA(n_components=5)
-            pca_sub.fit(data_b_sub)
-            components_sub = pca_sub.transform(data_b_sub)
-
-            ax[1, n_p].scatter(components_sub[:,0],components_sub[:,1], color = c_meta_hist[f'code_sub_b{b}'].astype(str).map(color_map_sub))
-            handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values_sub]
-            ax[1, n_p].legend(handlelist, color_labels_sub, title="Updated cluster")
-            ax[1, n_p].set_xlabel('pc1')
-            ax[1, n_p].set_xlabel('pc2')
-            ax[1, n_p].set_title(f'PCA on latent space in round {b}, (k={k_sub})')
-
-    # Plot c_data
-
-    plt.tight_layout()
-    
-    if plot_save_path != '':
-        plt.savefig(plot_save_path, dpi=300)
-        
-    plt.show()
-
-
-def plot_c_PCA_latent(c_data, n_rounds, fit_returns, model, plots_save_path):
-    _, c_meta_hist, _, _, _, _, _, c_latent_list, _ = fit_returns
-    
-    for k in model.which_non_empty_cluster:
-        plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=k, plot_save_path=f'{plots_save_path}_k{k}.png')
-            
-
-
-def plot_c_PCA_latent_old(c_data, c_latent_list, c_meta_hist, n_rounds, legend_title='cluster', k=1, plot_save_path=''):
-    
-    color_labels = np.array(list(map(str, c_meta_hist['code'].unique())))
-    for b in range(n_rounds):
-        color_labels = np.union1d(color_labels, c_meta_hist[f'code_b{b}'].unique())   
-    color_values = sns.color_palette("Set2", 8)
-    color_map = dict(zip(color_labels, color_values))
-
-    n_pics = n_rounds+1
     fig, ax = plt.subplots(nrows=1, ncols=n_pics, figsize=(n_pics*5, 5))
 
-    # Plot c_data
-    pca = PCA(n_components=5)
-    pca.fit(c_data)
-    components = pca.transform(c_data)
+    color_labels = c_meta_hist['code'].astype(str).apply(lambda x: bool(re.search(str(k), x))) 
+    color_labels = color_labels.astype(int)
 
-    ax[0].scatter(components[:,0],components[:,1], color=c_meta_hist['code'].astype(str).map(color_map))
+    ax[0].scatter(components[:,0],components[:,1], color=color_labels.map(color_map))
     handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
-    ax[0].legend(handlelist, color_labels, title=legend_title)
+    ax[0].legend(handlelist, legend_labels, title="Prior cluster")
     ax[0].set_xlabel('pc1')
     ax[0].set_ylabel('pc2')
-    ax[0].set_title(f'Original clustering (k={k})')
+    ax[0].set_title(f'PCA on input data (k={k})')
 
     for b in range(n_rounds):
         n_p = b + 1
@@ -149,19 +42,33 @@ def plot_c_PCA_latent_old(c_data, c_latent_list, c_meta_hist, n_rounds, legend_t
         pca.fit(data_b)
         components = pca.transform(data_b)
 
-        ax[n_p].scatter(components[:,0],components[:,1], color = c_meta_hist[f'code_b{b}'].astype(str).map(color_map))
+        color_labels = c_meta_hist[f'code_b{b}'].astype(str).apply(lambda x: bool(re.search(str(k), x))) 
+        color_labels = color_labels.astype(int)
+
+        ax[n_p].scatter(components[:,0],components[:,1], color = color_labels.map(color_map))
         handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
-        ax[n_p].legend(handlelist, color_labels, title=legend_title)
+        ax[n_p].legend(handlelist, legend_labels, title="Updated cluster")
         ax[n_p].set_xlabel('pc1')
         ax[n_p].set_xlabel('pc2')
-        ax[n_p].set_title(f'Round {b + 1} updated clustering (k={k})')
+        ax[n_p].set_title(f'PCA on latent space in round {b}, (k={k})')
 
+    # Plot c_data
     plt.tight_layout()
     
     if plot_save_path != '':
         plt.savefig(plot_save_path, dpi=300)
         
     plt.show()
+
+            
+
+
+def plot_c_PCA_latent(c_data, n_rounds, fit_returns, model, plots_save_path):
+    _, c_meta_hist, _, _, _, _, _, c_latent_list, _ = fit_returns
+    
+    for k in model.which_non_empty_cluster:
+        plot_c_PCA_latent_help(c_data, c_latent_list, c_meta_hist, n_rounds, k=k, plot_save_path=f'{plots_save_path}_k{k}.png')
+            
 
 
 
@@ -297,102 +204,49 @@ def plot_c_PCA_latent_test(model, device, n_rounds, c_latent_list, c_train, c_te
 
 
 
-def plot_d_PCA_latent_help(d_data, d_latent_list, d_sens_hist, n_rounds, k=1, k_sub=None, plot_save_path=''):
+def plot_d_PCA_latent_help(d_data, d_latent_list, d_sens_hist, n_rounds, k=1, plot_save_path=''):
     
-    color_labels = np.array(list(map(str, d_sens_hist['sensitive_k'].unique())))
-    for b in range(n_rounds):
-        color_labels = np.union1d(color_labels, d_sens_hist[f'sensitive_k_b{b}'].unique())   
-    color_values = sns.color_palette("Set2", 8)
-    color_map = dict(zip(color_labels, color_values))
-
-    if  k_sub != None:
-        color_labels_sub = d_sens_hist[f'sensitive_k_b{n_rounds - 1}'].astype(str).values
-        for b in range(n_rounds):
-            color_labels_sub = np.union1d(color_labels_sub, d_sens_hist[f'sensitive_k_sub_b{b}'].unique())   
-        color_values_sub = sns.color_palette("Set2", 8)
-        color_map_sub = dict(zip(color_labels_sub, color_values_sub))
-
-
-    n_pics = n_rounds+1
+    color_values = ["#D9B4D5", "#6BBC47"]
+    color_map = dict(zip([0,1], color_values))
+    legend_labels = ['Not senstitive', 'Senstitive']
 
     pca = PCA(n_components=5)
     pca.fit(d_data)
     components = pca.transform(d_data)
 
-    if k_sub == None:
-        fig, ax = plt.subplots(nrows=1, ncols=n_pics, figsize=(n_pics*5, 5))
+    n_pics = n_rounds+1
 
-        ax[0].scatter(components[:,0],components[:,1], color=d_sens_hist['sensitive_k'].astype(str).map(color_map))
+    fig, ax = plt.subplots(nrows=1, ncols=n_pics, figsize=(n_pics*5, 5))
+
+    color_labels = d_sens_hist['sensitive_k'].astype(str).apply(lambda x: bool(re.search(str(k), x))) 
+    color_labels = color_labels.astype(int)
+
+    ax[0].scatter(components[:,0],components[:,1], color=color_labels.map(color_map))
+    handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
+    ax[0].legend(handlelist, legend_labels, title="Prior cluster")
+    ax[0].set_xlabel('pc1')
+    ax[0].set_ylabel('pc2')
+    ax[0].set_title(f'PCA on input data (k={k})')
+
+    for b in range(n_rounds):
+        n_p = b + 1
+
+        data_b = d_latent_list[k][b]
+        pca = PCA(n_components=5)
+        pca.fit(data_b)
+        components = pca.transform(data_b)
+
+        color_labels = d_sens_hist[f'sensitive_k_b{b}'].astype(str).apply(lambda x: bool(re.search(str(k), x))) 
+        color_labels = color_labels.astype(int)
+
+        ax[n_p].scatter(components[:,0],components[:,1], color = color_labels.map(color_map))
         handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
-        ax[0].legend(handlelist, color_labels, title="Prior cluster")
-        ax[0].set_xlabel('pc1')
-        ax[0].set_ylabel('pc2')
-        ax[0].set_title(f'PCA on input data (k={k})')
-
-
-        for b in range(n_rounds):
-            n_p = b + 1
-
-            data_b = d_latent_list[k][b]
-            pca = PCA(n_components=5)
-            pca.fit(data_b)
-            components = pca.transform(data_b)
-
-            ax[n_p].scatter(components[:,0],components[:,1], color = d_sens_hist[f'sensitive_k_b{b}'].astype(str).map(color_map))
-            handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
-            ax[n_p].legend(handlelist, color_labels, title="Updated cluster")
-            ax[n_p].set_xlabel('pc1')
-            ax[n_p].set_xlabel('pc2')
-            ax[n_p].set_title(f'PCA on latent space in round {b}, (k={k})')
-
-    else:
-        fig, ax = plt.subplots(nrows=2, ncols=n_pics, figsize=(n_pics*5, 2*5))
-
-        ax[0,0].scatter(components[:,0],components[:,1], color=d_sens_hist['sensitive_k'].astype(str).map(color_map))
-        handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
-        ax[0,0].legend(handlelist, color_labels, title="Prior cluster")
-        ax[0,0].set_xlabel('pc1')
-        ax[0,0].set_ylabel('pc2')
-        ax[0,0].set_title(f'PCA on input data (k={k})')
-
-        ax[1,0].scatter(components[:,0],components[:,1], color=d_sens_hist[f'sensitive_k_b{n_rounds-1}'].astype(str).map(color_map_sub))
-        handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values_sub]
-        ax[1,0].legend(handlelist, color_labels_sub, title="Prior cluster")
-        ax[1,0].set_xlabel('pc1')
-        ax[1,0].set_ylabel('pc2')
-        ax[1,0].set_title(f'PCA on input data (k={k_sub})')
-
-        for b in range(n_rounds):
-            n_p = b + 1
-
-            data_b = d_latent_list[k][b]
-
-            pca = PCA(n_components=5)
-            pca.fit(data_b)
-            components = pca.transform(data_b)
-
-            ax[0, n_p].scatter(components[:,0],components[:,1], color = d_sens_hist[f'sensitive_k_b{b}'].astype(str).map(color_map))
-            handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values]
-            ax[0, n_p].legend(handlelist, color_labels, title="Updated cluster")
-            ax[0, n_p].set_xlabel('pc1')
-            ax[0, n_p].set_xlabel('pc2')
-            ax[0, n_p].set_title(f'PCA on latent space in round {b}, (k={k})')
-
-            data_b_sub = d_latent_list[k_sub][b]
-
-            pca_sub = PCA(n_components=5)
-            pca_sub.fit(data_b_sub)
-            components_sub = pca_sub.transform(data_b_sub)
-
-            ax[1, n_p].scatter(components_sub[:,0],components_sub[:,1], color = d_sens_hist[f'sensitive_k_sub_b{b}'].astype(str).map(color_map_sub))
-            handlelist = [plt.plot([], marker="o", ls="", color=color)[0] for color in color_values_sub]
-            ax[1, n_p].legend(handlelist, color_labels_sub, title="Updated cluster")
-            ax[1, n_p].set_xlabel('pc1')
-            ax[1, n_p].set_xlabel('pc2')
-            ax[1, n_p].set_title(f'PCA on latent space in round {b}, (k={k_sub})')
+        ax[n_p].legend(handlelist, legend_labels, title="Updated cluster")
+        ax[n_p].set_xlabel('pc1')
+        ax[n_p].set_xlabel('pc2')
+        ax[n_p].set_title(f'PCA on latent space in round {b}, (k={k})')
 
     # Plot c_data
-
     plt.tight_layout()
     
     if plot_save_path != '':
