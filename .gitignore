@@ -5,6 +5,7 @@
 .pkl
 .pyc
 .html
+.DS_Store
 Paper_materials
 data/
 R plots/
