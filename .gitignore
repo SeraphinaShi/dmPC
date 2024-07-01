@@ -6,6 +6,7 @@
 .pyc
 .html
 .DS_Store
+*.html
 Paper_materials
 data/
 R plots/

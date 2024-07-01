@@ -222,9 +222,7 @@ mtext("Cance\n Types", side = 2, line = 0.5, at = 0.85, las = 2, cex = 0.8) # Ad
 # mtext(text = c_type_levels, side = 2, line = 1, at = seq(0, 1, length.out = length(c_type_levels) + 1) - 0.5/length(c_type_levels), las = 2, cex = 0.8)
 ```
 
-
 # Lung
-## Input
 ```{r}
 c_types <- c("LUAD","LUSC", "SCLC",  "MESO")
 
@@ -236,9 +234,7 @@ cdr_lung <- cdr[as.character(c_meta_lung$COSMIC_ID), ]
 c_colors_lung <- c(rep("lightblue", nrow(c_data_lung)))
 ```
 
-CDR
-
-```{r skin_cdr_heatmap, fig.height=6, fig.width=10}
+```{r lung_cdr_heatmap, fig.height=6, fig.width=10}
 cdr_tmp = as.matrix(cdr_lung)
     
 cdr_row_color = c_colors_lung
@@ -247,174 +243,181 @@ cdr_col_color = rep('white', ncol(cdr_tmp))
 cdr_heatmap_hier = make_cdr_heatmap(cdr_tmp, cdr_row_color, cdr_col_color, F, F)
 ```
 
-```{r skin_cdr_heatmap_clust_fillna, fig.height=6, fig.width=10}
-cdr_heatmap_hier = make_cdr_heatmap(cdr_tmp, cdr_row_color, cdr_col_color, T, F)
-```
 
-```{r skin_cdr_heatmap_clust_fillna, fig.height=6, fig.width=10}
+```{r lung_cdr_heatmap_clust_2, fig.height=6, fig.width=10}
 cdr_heatmap_hier = make_cdr_heatmap_fillna_binary(cdr_tmp, cdr_row_color, cdr_col_color, T, T)
 ```
 
-Cancer expression data
+## BCPlaid
+```{r warning=F, message=FALSE}
+library("biclust")
 
-```{r skin_c_heatmap_hier, fig.width=10, fig.height=6}
-heatmap_c <- heatmap.2(as.matrix(c_data_lung),  # Exclude non-numeric columns
-                         Rowv = F,  # Do not perform hierarchical clustering on rows
-                         Colv = F,  # perform hierarchical clustering on columns
-                         col = colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299), 
-                         dendrogram = "both",  # show dendrograms
-                         trace = "none",  # Do not show trace
-                         key = T,  # Show color key
-                         RowSideColors = c_colors_lung,  # Row annotation color
-                         labRow = T,  # Hide row names
-                         labCol = F,  # Hide column names
-                         main = "Cancer preprocessed RNAseq Data"
-                         )
+cdr_bi <- cdr_tmp
+cdr_bi[is.na(cdr_bi)] = -1
+cdr_bi <- as.matrix(cdr_bi)
 ```
-
-Drug PCA features
-```{r skin_c_heatmap_hier, fig.width=10, fig.height=6}
-heatmap_c <- heatmap.2(as.matrix(d_data),  # Exclude non-numeric columns
-                         Rowv = F,  # Do not perform hierarchical clustering on rows
-                         Colv = T,  # perform hierarchical clustering on columns
-                         col = colorRampPalette(c("blue", "purple", "white", "orange", "red"))(n = 299),  # Apply custom colors to heatmap
-                         dendrogram = "both",  # show dendrograms
-                         trace = "none",  # Do not show trace
-                         key = T,  # Show color key
-                         RowSideColors = rep("white", nrow(d_data)),  # Row annotation color
-                         labRow = T,  # Hide row names
-                         labCol = F,  # Hide column names
-                         main = "Drug PCA Features Data"
-                         )
-```
-
-## Output
 
 ```{r}
-version_folder = "lung_5" 
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = F, verbose=FALSE)
+heatmapBC(cdr_bi, bicResult)
 
-cdr_lung_hat <- read.csv(here(dataFolder, version_folder, 
-                            paste0("GDSC_", version_folder, "_cdr_hat.csv")), 
-                       row.names = 1)
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = F, verbose=FALSE,
+                     row.release = 0.5, col.release = 0.5)
+heatmapBC(cdr_bi, bicResult)
 
 
-clust_num <- 1
-c_latent_list <- list()
-d_latent_list <- list()
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = F, verbose=FALSE,
+                     row.release = 0.6, col.release = 0.5)
+heatmapBC(cdr_bi, bicResult)
 
-for (i in 0:(clust_num-1)){
-  c_latent_list[[i+1]] <- read.csv(here(dataFolder, version_folder, paste0("GDSC_", version_folder,"_c_latent_cluster", i, ".csv")), row.names = 1)
-  d_latent_list[[i+1]] <- read.csv(here(dataFolder, version_folder, paste0("GDSC_", version_folder,"_d_latent_cluster", i, ".csv")), row.names = 1)
-  
-  assign(paste0("c_latent_", i), 
-         read.csv(here(dataFolder, version_folder, paste0("GDSC_", version_folder,"_c_latent_cluster", i, ".csv")), 
-                  row.names = 1))
-  assign(paste0("d_latent_", i), 
-         read.csv(here(dataFolder, version_folder, paste0("GDSC_", version_folder,"_d_latent_cluster", i, ".csv")), 
-                  row.names = 1))
-}
-
-cdr_lung_hat$cluster <- gsub("0", "A", cdr_lung_hat$cluster)
-cdr_lung_hat$cluster <- gsub("1", "B", cdr_lung_hat$cluster)
-cdr_lung_hat$cluster <- gsub("2", "C", cdr_lung_hat$cluster)
-cdr_lung_hat$cluster <- gsub("3", "D", cdr_lung_hat$cluster)
-cdr_lung_hat$cluster <- gsub("4", "E", cdr_lung_hat$cluster)
-cdr_lung_hat$cluster <- gsub("5", "F", cdr_lung_hat$cluster)
-cdr_lung_hat$cluster[cdr_lung_hat$cluster == "-B"] <- "-1"
-
-cdr_lung_hat$c_cluster <- gsub("0", "A", cdr_lung_hat$c_cluster)
-cdr_lung_hat$c_cluster <- gsub("1", "B", cdr_lung_hat$c_cluster)
-cdr_lung_hat$c_cluster <- gsub("2", "C", cdr_lung_hat$c_cluster)
-cdr_lung_hat$c_cluster <- gsub("3", "D", cdr_lung_hat$c_cluster)
-cdr_lung_hat$c_cluster <- gsub("4", "E", cdr_lung_hat$c_cluster)
-cdr_lung_hat$c_cluster <- gsub("5", "F", cdr_lung_hat$c_cluster)
-cdr_lung_hat$c_cluster[cdr_lung_hat$c_cluster == "-B"] <- "-1"
-
-cdr_lung_hat$d_cluster <- gsub("0", "A", cdr_lung_hat$d_cluster)
-cdr_lung_hat$d_cluster <- gsub("1", "B", cdr_lung_hat$d_cluster)
-cdr_lung_hat$d_cluster <- gsub("2", "C", cdr_lung_hat$d_cluster)
-cdr_lung_hat$d_cluster <- gsub("3", "D", cdr_lung_hat$d_cluster)
-cdr_lung_hat$d_cluster <- gsub("4", "E", cdr_lung_hat$d_cluster)
-cdr_lung_hat$d_cluster <- gsub("5", "F", cdr_lung_hat$d_cluster)
-cdr_lung_hat$d_cluster[cdr_lung_hat$d_cluster == "-B"] <- "-1"
-
-c_cluster <- cdr_lung_hat[,c('c_name', 'c_cluster')] %>% unique()
-d_cluster <- cdr_lung_hat[,c('d_name', 'd_cluster')] %>% unique()
-cd_cluster <-  cdr_lung_hat[,c('c_name', 'd_name', 'cluster')] %>% unique()
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = F, verbose=FALSE,
+                     row.release = 0.6, col.release = 0.6)
+heatmapBC(cdr_bi, bicResult)
 ```
-
 
 ```{r}
-clust_levels <- row.names(as.matrix(table(cd_cluster$cluster)))
-clust_levels <- c(clust_levels[-1], "-1")
-cd_cluster$cluster <- factor(cd_cluster$cluster, levels = clust_levels)
-table( cd_cluster$cluster, as.integer(cd_cluster$cluster))
-cd_cluster$cluster <- as.integer(cd_cluster$cluster)
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = F, verbose=FALSE,
+                     row.release = 0.8, col.release = 0.8)
+heatmapBC(cdr_bi, bicResult)
 
-cd_cluster_wide <- cd_cluster %>% 
-  pivot_wider(names_from = d_name, values_from = cluster) %>% 
-  as.data.frame()
-rownames(cd_cluster_wide) <- cd_cluster_wide$c_name
-cd_cluster_wide <- cd_cluster_wide %>% select(-c_name)
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = TRUE, verbose=FALSE,
+                     row.release = 0.5, col.release = 0.5)
+heatmapBC(cdr_bi, bicResult)
+
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = TRUE, verbose=FALSE,
+                     row.release = 0.6, col.release = 0.5)
+heatmapBC(cdr_bi, bicResult)
 ```
+
+
+
+# Breast
 ```{r}
-table(d_cluster$d_cluster)
+c_types <- c("BRCA")
+
+c_meta_breast <- c_meta[c_meta$cancer_type %in% c_types, ]
+
+c_data_breast <- c_data[c_meta_breast$COSMIC_ID, ]
+cdr_breast <- cdr[as.character(c_meta_breast$COSMIC_ID), ]
+
+c_colors_breast <- c(rep("#FFB90F", nrow(c_data_breast)))
 ```
 
+```{r breast_cdr_heatmap, fig.height=6, fig.width=10}
+cdr_tmp = as.matrix(cdr_breast)
+    
+cdr_row_color = c_colors_breast
+cdr_col_color = rep('white', ncol(cdr_tmp))
+
+cdr_heatmap_hier = make_cdr_heatmap(cdr_tmp, cdr_row_color, cdr_col_color, F, F)
+```
+
+
+```{r breast_cdr_heatmap_clust_2, fig.height=6, fig.width=10}
+cdr_heatmap_hier = make_cdr_heatmap_fillna_binary(cdr_tmp, cdr_row_color, cdr_col_color, T, T)
+```
+
+## BCPlaid
+```{r warning=F, message=FALSE}
+library("biclust")
+
+cdr_bi <- cdr_tmp
+cdr_bi[is.na(cdr_bi)] = -1
+cdr_bi <- as.matrix(cdr_bi)
+```
 
 ```{r}
-set.seed(45)
-init_heatmap <- heatmap.2(as.matrix(cd_cluster_wide),
-                          dendrogram = "both",
-                          trace = "none")
+set.seed(12)
 
-cd_cluster_wide_new <- cd_cluster_wide[rev(init_heatmap$rowInd), init_heatmap$colInd]
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = F, verbose=FALSE,
+                     row.release = 0.5, col.release = 0.5)
+heatmapBC(cdr_bi, bicResult)
+
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = F, verbose=FALSE,
+                     row.release = 0.5, col.release = 0.7)
+heatmapBC(cdr_bi, bicResult)
+
+
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = F, verbose=FALSE,
+                     row.release = 0.6, col.release = 0.5)
+heatmapBC(cdr_bi, bicResult)
+
 ```
-
 
 ```{r}
-#View(cd_cluster_wide_new)
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = TRUE, verbose=FALSE,
+                     row.release = 0.5, col.release = 0.5)
+heatmapBC(cdr_bi, bicResult)
 
-c.names.ll = c(row.names(cd_cluster_wide_new))
-d.names.ll = c(colnames(cd_cluster_wide_new))
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = TRUE, verbose=FALSE,
+                     row.release = 0.6, col.release = 0.5)
+heatmapBC(cdr_bi, bicResult)
 ```
 
 
+
+
+# Colon
+```{r}
+c_types <- c("COAD/READ")
+
+c_meta_colon <- c_meta[c_meta$cancer_type %in% c_types, ]
+
+c_data_colon <- c_data[c_meta_colon$COSMIC_ID, ]
+cdr_colon <- cdr[as.character(c_meta_colon$COSMIC_ID), ]
+
+c_colors_colon <- c(rep(c_type_color["COAD/READ"], nrow(c_data_colon)))
+```
+
+```{r colon_cdr_heatmap, fig.height=6, fig.width=10}
+cdr_tmp = as.matrix(cdr_colon)
+    
+cdr_row_color = c_colors_colon
+cdr_col_color = rep('white', ncol(cdr_tmp))
+
+cdr_heatmap_hier = make_cdr_heatmap(cdr_tmp, cdr_row_color, cdr_col_color, F, F)
+```
+
+
+```{r colon_cdr_heatmap_clust_2, fig.height=6, fig.width=10}
+cdr_heatmap_hier = make_cdr_heatmap_fillna_binary(cdr_tmp, cdr_row_color, cdr_col_color, T, T)
+```
+
+## BCPlaid
+```{r warning=F, message=FALSE}
+library("biclust")
+
+cdr_bi <- cdr_tmp
+cdr_bi[is.na(cdr_bi)] = -1
+cdr_bi <- as.matrix(cdr_bi)
+```
 
 ```{r}
+set.seed(12)
 
-cdr_hat_predicts <- cdr_lung_hat[,c('c_name', 'd_name', 'cdr_hat')] %>% 
-  unique() %>% 
-  tidyr::pivot_wider(names_from = d_name, values_from = cdr_hat) %>%
-  as.data.frame() %>%
-  `rownames<-`(.$c_name) %>%
-  select(-c_name)
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = F, verbose=FALSE,
+                     row.release = 0.5, col.release = 0.5)
+heatmapBC(cdr_bi, bicResult)
 
-cdr_hat_predicts <- cdr_hat_predicts[c.names.ll, d.names.ll]
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = F, verbose=FALSE,
+                     row.release = 0.5, col.release = 0.7)
+heatmapBC(cdr_bi, bicResult)
+
+
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = F, verbose=FALSE,
+                     row.release = 0.6, col.release = 0.5)
+heatmapBC(cdr_bi, bicResult)
 
 ```
 
+```{r}
+bicResult <- biclust(cdr_bi, method=BCPlaid(), background = TRUE, verbose=FALSE,
+                     row.release = 0.5, col.release = 0.5)
+heatmapBC(cdr_bi, bicResult)
 
-
-### EDA
-
-```{r skin_cdr_hat_heatmap, fig.height=6, fig.width=10}
-heatmap.2(as.matrix(cdr_hat_predicts), 
-          Rowv = F, Colv=F, 
-          trace='none',
-          col = colorRampPalette(c("#D9B4D5",  "white",  "#6BBC47"))(n = 20))
-
-heatmap.2(as.matrix(cd_cluster_wide[c.names.ll, d.names.ll]),
-          Rowv = F, Colv=F,
-          trace = "none")
-
-heatmap.2(as.matrix(cdr_lung[c.names.ll, d.names.ll]),
-          Rowv = F, Colv=F,
-          trace = "none",
-          col = colorRampPalette(c("#D9B4D5",  "white",  "#6BBC47"))(n = 20))
-
-
-row.names(c_cluster) <- c_cluster$c_name
-row.names(d_cluster) <- d_cluster$d_name
-c_cluster[c.names.ll, ]
+# bicResult <- biclust(cdr_bi, method=BCPlaid(), background = TRUE, verbose=FALSE,
+#                      row.release = 0.6, col.release = 0.5)
+# heatmapBC(cdr_bi, bicResult)
 ```
+
+
