@@ -1,0 +1,266 @@
+---
+title: "Simulations of cancer data,  drug data, and corrresponding cancer drug response data"
+author: "Seraphina Shi"
+date: "2023-03-17"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include = FALSE, warning=FALSE, message=FALSE, echo=FALSE}
+library(here)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(RColorBrewer)
+library(gplots)
+library(reshape)
+
+plotFolder <- here("images", "simulations")
+if(!file.exists(plotFolder)) dir.create(plotFolder,recursive=TRUE)
+
+dataFolder <- here("data", "simulations")
+if(!file.exists(dataFolder)) dir.create(dataFolder,recursive=TRUE)
+
+knitr::opts_chunk$set(
+  cache=FALSE, autodep=FALSE, warning=FALSE, message=FALSE, echo=TRUE,
+  results = 'markup', dev='png', dpi=150, fig.align = "center",
+  fig.path=paste0(plotFolder, "/"),
+  cache.path=".cache/",
+  duplicate.label="allow"
+)
+```
+
+```{r}
+GDSC_folder <- here("data", "GDSC")
+```
+
+In this R file, we simulate multiple synthetic samples based on lung cancer cell
+lines. 
+
+# Original data
+Load GDSC lung cancer cell lines 
+```{r}
+# cancer data
+RNAseq_rpkm <- read.csv(file=here(GDSC_folder, "GDSC_lung_RNAseq_rpkm.csv"), row.names = 1, header= TRUE)
+names(RNAseq_rpkm) <- gsub("X", "", names(RNAseq_rpkm))
+
+cl_meta <- read.csv(file=here(GDSC_folder, "GDSC_CellLine_lung_annotation.csv"), header=TRUE)
+cl_meta <- cl_meta[cl_meta$COSMIC_ID %in% names(RNAseq_rpkm) & (!is.na(cl_meta$COSMIC_ID)), ]
+
+# drug data
+
+# Cancer drug response data
+CDR_auc_bi <- read.csv(file=here(GDSC_folder, "GDSC_DrugResponse_binarized.csv"), row.names = 1, header= TRUE)
+names(CDR_auc_bi) <- gsub("X", "", names(CDR_auc_bi))
+```
+
+# Simulate data 1 (GDSC, NSCLC)
+
+## Cancer 
+```{r fig.width=6, fig.height=7}
+#---------------------------------------------------
+# 0. check cancer types
+#---------------------------------------------------
+table(cl_meta$cancer_type)
+
+#---------------------------------------------------
+# 1. focus on NSCLC and SCLC 
+#---------------------------------------------------
+NSCLC_COSMIC <- cl_meta$COSMIC_ID[cl_meta$cancer_type == "NSCLC"]
+NSCLC_COSMIC <- NSCLC_COSMIC[!is.na(NSCLC_COSMIC)]
+
+NSCLC_RNAseq <- RNAseq_rpkm %>% select(all_of(as.character(NSCLC_COSMIC)))
+dim(NSCLC_RNAseq) # [1] 5703   76
+
+heatmap.2(as.matrix(NSCLC_RNAseq),
+          trace="none",
+          col = rev(colorRampPalette(brewer.pal(10, "RdYlBu"))(256)) ,
+          labRow=FALSE,
+          main = "Heatmap of NSCLC cell line data",
+          key.title = "Color Key\n& Histogram",
+          key.xlab=NA,
+          keysize=1
+          )
+```
+
+```{r}
+#---------------------------------------------------
+# 2.1 select some consistently highly expressed or lowly expressed genes for each cancer type
+#. 2.2.   select several genes with high expression variability for each cancer type
+#. 2.3 keep these genes in the simulated data
+#---------------------------------------------------
+set.seed(123)
+row_means <- apply(NSCLC_RNAseq, 1, mean)
+row_vars <- apply(NSCLC_RNAseq, 1, var)
+summary(row_means)
+summary(row_vars)
+
+NSCLC_consistently_high_genes <- row.names(NSCLC_RNAseq)[which(row_vars < 0.35 & (row_means > 0.4 ))] 
+NSCLC_consistently_low_genes <- row.names(NSCLC_RNAseq)[which(row_vars < 0.35 & (row_means < -0.4 ))] 
+NSCLC_consistently_med_genes <- row.names(NSCLC_RNAseq)[which(row_vars < 0.35 & (-0.1 < row_means & row_means < 0.1))] 
+
+NSCLC_high_var_expressed_genes <- row.names(NSCLC_RNAseq)[which(row_vars > 2.3 )]
+
+
+selected_genes <- unique(c(NSCLC_consistently_high_genes, NSCLC_consistently_low_genes,
+                               NSCLC_consistently_med_genes,  NSCLC_high_var_expressed_genes))
+NSCLC_random_genes <- sample(row.names(NSCLC_RNAseq)[! row.names(NSCLC_RNAseq) %in% selected_genes], size=50)
+
+c(length(NSCLC_consistently_high_genes), length(NSCLC_consistently_low_genes), length(NSCLC_consistently_med_genes), length(NSCLC_high_var_expressed_genes), length(NSCLC_random_genes))
+
+all_selected_genes <- unique(c(NSCLC_consistently_high_genes, NSCLC_consistently_low_genes,
+                               NSCLC_consistently_med_genes,  NSCLC_high_var_expressed_genes,
+                               NSCLC_random_genes))
+length(all_selected_genes) 
+
+
+NSCLC_RNAseq_s <- NSCLC_RNAseq %>% 
+                    t() %>% as.data.frame() %>% 
+                    select(all_of(all_selected_genes)) %>% 
+                    t() %>% as.data.frame()
+
+dim(NSCLC_RNAseq_s)
+```
+
+```{r fig.width=6, fig.height=7}
+#---------------------------------------------------
+# 4. separate the cancers into two groups
+#---------------------------------------------------
+cat_genes <- NSCLC_high_var_expressed_genes[1:10]
+library(corrplot)
+corrplot(cor(t(NSCLC_RNAseq_s[NSCLC_high_var_expressed_genes,])))
+
+apply(NSCLC_RNAseq_s[c("SIDG05348", "SIDG05982", "SIDG09035", "SIDG09036", "SIDG09100", "SIDG10617", "SIDG37641"),], 1, mean)
+sep <- NSCLC_RNAseq["SIDG05348",] < 0.5 & NSCLC_RNAseq["SIDG09035",] < 0.5 & 
+  NSCLC_RNAseq["SIDG09036",] < 0.5 & NSCLC_RNAseq["SIDG09100",] < 0.5 & NSCLC_RNAseq["SIDG10617",] < 0.5
+
+grp1 <- names(NSCLC_RNAseq_s)[which(sep)]
+grp2 <- names(NSCLC_RNAseq_s)[which(!sep)]
+
+grp1_RNAseq <- NSCLC_RNAseq_s %>% 
+  select(all_of(as.character(grp1))) 
+
+grp2_RNAseq <- NSCLC_RNAseq_s %>% 
+  select(all_of(as.character(grp2))) 
+
+
+RNAseq_simu <- cbind(grp1_RNAseq, grp2_RNAseq)
+RNAseq_meta_simu <- cbind(C_ID = colnames(RNAseq_simu), 
+                          C_type = c(rep("grp1", length(grp1)), rep("grp2", length(grp2))))
+
+
+heatmap.2(as.matrix(RNAseq_simu),
+          trace="none",
+          col = rev(colorRampPalette(brewer.pal(10, "RdYlBu"))(256)) ,
+          Colv=FALSE,
+          Rowv = FALSE,
+          labRow=FALSE,
+          main = "Heatmap of cancer cell line data",
+          ColSideColors = c(rep("#00BFC4",length(grp1)), rep("#F8766D", length(grp2))),
+          key.title = "Color Key\n& Histogram",
+          key.xlab=NA,
+          keysize=1
+          )
+legend(y=1.05, x=.12, xpd=TRUE,
+       legend = c("group1","group2"),
+       col = c("#00BFC4", "#F8766D"),
+       lty= 1, lwd = 5, cex=.7
+       )
+```
+
+
+## Drug
+
+Since drug data is complicated and can be expressed through multiple ways, (smile strings, molecular fingerprints, and molecular graphs); we start with fingerprints that are easier to simulate and easier to create the cancer-drug-response functions. 
+
+```{r}
+set.seed(123)
+p <- 100
+# 10 drugs to start with
+drug_simu_func <- function(n, p, k_fp_idx){
+  fp <- matrix(nrow = n, ncol = p)
+  for(i in 1:p){
+    if(i %in% k_fp_idx){
+      fp[,i] = rbinom(n=n, size = 1, prob = 0.95)
+    } else {
+      fp[, i] = rbinom(n=n, size = 1, prob = 0.5)
+    }
+  }
+  return(fp)
+}
+
+n_d = 5
+p = 150
+
+d_fp <- rbind(drug_simu_func(n_d, p, 1:20),
+              drug_simu_func(n_d, p, 50:70))
+
+colnames(d_fp) <- paste0("f", 1:p)
+rownames(d_fp) <- c(paste0("d_g1_", 1:n_d), paste0("d_g2_", 1:n_d))
+
+d_fp <- t(d_fp)
+
+
+heatmap.2(as.matrix(d_fp),
+          trace="none",
+          # col = rev(colorRampPalette(brewer.pal(10, "RdYlBu"))(256)) ,
+          Colv=FALSE,
+          Rowv = FALSE,
+          labRow=FALSE,
+          main = "Heatmap of drug fingureprints data",
+          ColSideColors = c(rep("#00BFC4",n_d), rep("#F8766D", n_d)),
+          key.title = "Color Key\n& Histogram",
+          key.xlab=NA,
+          keysize=1
+          )
+legend(y=1.05, x=.12, xpd=TRUE,
+       legend = c("group1","group2"),
+       col = c("#00BFC4", "#F8766D"),
+       lty= 1, lwd = 5, cex=.7
+       )
+```
+    
+
+## Cancer Drug Response
+```{r}
+n_c =  ncol(RNAseq_simu)
+n_d = ncol(d_fp)/2
+cdr <- matrix(0, nrow = n_c, ncol = n_d*2)
+cdr[1:length(grp1), 1:n_d] = 1
+cdr[(length(grp1)+1):n_c, (n_d+1):(n_d*2)] = 1
+colnames(cdr) = colnames(d_fp)
+rownames(cdr) = colnames(RNAseq_simu)
+
+heatmap.2(t(as.matrix(cdr)),
+          trace="none",
+          # col = rev(colorRampPalette(brewer.pal(10, "RdYlBu"))(256)) ,
+          Colv=FALSE,
+          Rowv = FALSE,
+          main = "Heatmap of drug fingureprints data",
+          ColSideColors = c(rep("#00BFC4",length(grp1)), rep("#F8766D", length(grp2))),
+          key.title = "Color Key\n& Histogram",
+          key.xlab=NA,
+          keysize=1
+          )
+legend(y=1.05, x=.12, xpd=TRUE,
+       legend = c("group1","group2"),
+       col = c("#00BFC4", "#F8766D"),
+       lty= 1, lwd = 5, cex=.7
+       )
+
+```
+
+
+```{r}
+write.csv(RNAseq_simu, here(dataFolder, "simu1_RNAseq.csv"))
+write.csv(RNAseq_meta_simu, here(dataFolder, "simu1_RNAseq_meta.csv"))
+write.csv(d_fp, here(dataFolder, "simu1_d_fp.csv"))
+write.csv(cdr, here(dataFolder, "simu1_cdr.csv"))
+```
+
+
+
+
